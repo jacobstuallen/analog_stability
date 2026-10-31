@@ -12,6 +12,8 @@ sigma dissimilarity) stay analogs under global warming levels?
   2. `analog.set.selection.py`: diverse top-N analog sets -> `analog_sets.nc`.
   3. `analog.retention.py`: retention of each set under GWLs.
   4. `analog.future.stability.py`: future focal vs historical best analog.
+  5. `analog.scaling.py`: linear-scaling test of pair divergence with GWL
+     (GWL1.5-4, common models, delta mode) -> `analog_scaling.nc`.
 - `diag.*.py`: diagnostics. `plot/`: figures. `ecoregion/`: ecoregion gridding.
 - `tests/`: synthetic-data regression check (see below).
 
@@ -45,6 +47,8 @@ that reach all requested GWLs (outputs get a `_common` suffix).
     python tests/compare_outputs.py <reference_out_dir> /tmp/out
     # delta-mode sanity check (run retention + stability with ANALOG_GWLS=gwl0,gwl2,gwl3)
     python tests/check_gwl0.py /tmp/out
+    # statistics behind analog.scaling.py
+    python tests/check_scaling_stats.py
 
 ## Data not in the repo
 TNC terrestrial ecoregions shapefile (`ecoregion/shp/`), all NetCDF inputs and

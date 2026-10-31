@@ -54,6 +54,18 @@ def focal_eig(vlat, vlon, clim_mean, icv_sd, icv_corr):
     return mu, sd, evals, evecs
 
 
+def pc_whiten(diff, sd, evals, evecs):
+    """Raw difference vectors -> whitened coordinates in each focal cell's
+    ICV PC space (unit ICV variance per retained PC). Dropped PCs are 0.
+    diff, sd (n,K); evals (n,K); evecs (n,K,K). Returns w (n,K), keep (n,K)."""
+    dstd = diff / sd
+    proj = np.einsum('nk,nkm->nm', dstd, evecs)
+    keep = evals >= cfg.PC_VAR_MIN
+    with np.errstate(invalid='ignore', divide='ignore'):
+        w = np.where(keep, proj / np.sqrt(np.where(keep, evals, 1.0)), 0.0)
+    return w, keep
+
+
 def pc_distance(diff, sd, evals, evecs):
     """Mahalanobis distance of raw difference vectors in each focal cell's
     ICV PC space. diff, sd (n,K); evals (n,K); evecs (n,K,K).
@@ -65,6 +77,39 @@ def pc_distance(diff, sd, evals, evecs):
         contrib = np.where(keep, proj**2 / evals, 0.0)
     d = np.sqrt(np.nansum(contrib, axis=1))
     return d, keep.sum(axis=1)
+
+
+def linear_fit_nlr(V, g, noise_var, kdims):
+    """Per-pair linear fit of divergence vectors against global warming level.
+
+    V (n,L,K): divergence vectors at L warming levels (whitened units).
+    g (L,): warming levels (deg C). noise_var: expected noise variance per
+    retained dimension of each V entry (e.g. 2/20/M for an M-model mean of
+    20-yr windows). kdims (n,): retained dimensions per pair.
+
+    Fits V = alpha + beta*g per dimension (free intercept absorbs the
+    baseline and its noise). Returns
+      rate (n,): |beta|, divergence per deg C
+      nlr  (n,): RSS / (noise_var * dof), ~1 if linear and noise is as assumed
+      pval (n,): chi-square p-value of RSS under linear + noise, dof=(L-2)*kdims
+      alpha, beta (n,K)
+    Overlapping windows correlate the noise and LOWER the residual, so the
+    test is conservative: nlr > 1 is evidence of nonlinearity."""
+    from scipy.stats import chi2
+    g = np.asarray(g, float)
+    L = len(g)
+    gc = g - g.mean()
+    vbar = V.mean(axis=1)                                   # (n,K)
+    beta = np.einsum('l,nlk->nk', gc, V - vbar[:, None, :]) / np.sum(gc**2)
+    alpha = vbar - beta * g.mean()
+    resid = V - (alpha[:, None, :] + beta[:, None, :] * g[None, :, None])
+    rss = np.sum(resid**2, axis=(1, 2))
+    dof = (L - 2) * np.asarray(kdims, float)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        nlr = rss / (noise_var * dof)
+        pval = chi2.sf(rss / noise_var, dof)
+    rate = np.sqrt(np.sum(beta**2, axis=1))
+    return rate, nlr, pval, alpha, beta
 
 
 def sigma_by_dims(d, mdims):
@@ -175,7 +220,8 @@ def model_window_mean(vk, model, ens, ys, ye, lat_min, lat_max):
         return np.nanmean(arr, axis=0)
 
 
-def load_future_gwl(bmin, bmax, gwls=None, clim_mean=None, mode=None, verbose=True):
+def load_future_gwl(bmin, bmax, gwls=None, clim_mean=None, mode=None, verbose=True,
+                    model_set=None):
     """Per-model GWL-window climatologies for every variable.
 
     mode 'delta' (default, cfg.FUTURE_MODE):
@@ -188,24 +234,25 @@ def load_future_gwl(bmin, bmax, gwls=None, clim_mean=None, mode=None, verbose=Tr
 
     Ensembles can differ by GWL: a model enters a GWL if it has a window
     there (cfg.MODEL_SET='per_gwl'), or only if it has windows for ALL
-    requested GWLs (cfg.MODEL_SET='common').
+    requested GWLs (model_set='common'; default cfg.MODEL_SET).
 
     Returns future_ens[gwl][vk] -> (n_models_gwl, nlat, nlon) and
     models_used[gwl] -> list of model names (same order as axis 0)."""
     gwls = gwls or cfg.GWLS
     mode = mode or cfg.FUTURE_MODE
+    model_set = model_set or cfg.MODEL_SET
     if mode not in ('delta', 'raw'):
         raise ValueError(f'unknown FUTURE_MODE {mode!r}')
     if mode == 'delta' and clim_mean is None:
         raise ValueError("mode='delta' needs clim_mean from load_era5_icv")
     if verbose:
         print(f'\nLoading CMIP6 GWL climatologies (mode={mode}, '
-              f'windows={cfg.GWL_SOURCE}, models={cfg.MODEL_SET})...')
+              f'windows={cfg.GWL_SOURCE}, models={model_set})...')
     stack = {g: {vk: [] for vk in cfg.VKEYS} for g in gwls}
     models_used = {g: [] for g in gwls}
     for model, ens in cfg.MODELS.items():
         mg = [g for g in gwls if model in cfg.GWL_WINDOWS[g]]
-        if cfg.MODEL_SET == 'common' and len(mg) < len(gwls):
+        if model_set == 'common' and len(mg) < len(gwls):
             mg = []
         if not mg:
             if verbose:
@@ -250,6 +297,23 @@ def load_future_gwl(bmin, bmax, gwls=None, clim_mean=None, mode=None, verbose=Tr
 
 def scen_label():
     return cfg.SCENARIO.upper().replace('SSP585', 'SSP5-8.5')
+
+
+def grid_indices(vals, axis_vals, tol=1e-3):
+    """Vectorized value -> index lookup on a 1-D grid axis. Returns -1 where
+    vals is NaN or not within tol of a grid value."""
+    order = np.argsort(axis_vals)
+    srt = axis_vals[order]
+    v = np.asarray(vals, float)
+    out = np.full(v.shape, -1, int)
+    ok = np.isfinite(v)
+    pos = np.clip(np.searchsorted(srt, v[ok]), 1, len(srt) - 1)
+    left, right = srt[pos - 1], srt[pos]
+    pick = np.where(np.abs(v[ok] - left) <= np.abs(v[ok] - right), pos - 1, pos)
+    hit = np.abs(srt[pick] - v[ok]) <= tol
+    tmp = np.where(hit, order[pick], -1)
+    out[ok] = tmp
+    return out
 
 
 def grid_index_lookup(lat_arr, lon_arr):

@@ -25,15 +25,19 @@ for tok, arr in [('txx', txx), ('rx5day', rx)]:
     xr.Dataset({f'timeseries-{tok}-annual-mean': (['time', 'lat', 'lon'], arr)},
                coords={'time': t, 'lat': lat, 'lon': lon}).to_netcdf(
         f'{root}/CCKP/ERA5/timeseries-{tok}-annual-mean_era5-x0.25_era5-x0.25-historical_timeseries_mean_1950-2024.nc')
-fy = np.arange(2015, 2101); tf = xr.date_range('2015-01-01', periods=len(fy), freq='YS')
+fy_all = np.arange(1950, 2101)
 for mi, (model, ens) in enumerate([('access-cm2', 'r1i1p1f1'), ('canesm5', 'r1i1p1f1'), ('miroc6', 'r1i1p1f1')]):
     bias_t = rng.normal(0, 1, txx_m.shape) + mi
     bias_r = rng.normal(0, 5, rx_m.shape)
     for tok, m, sd, tr, b in [('txx', txx_m, 1.0, 0.04 + 0.0005*LA, bias_t), ('rx5day', rx_m, 8.0, 0.2, bias_r)]:
-        arr = m[None] + b[None] + tr*(fy-1990)[:, None, None] + sd*rng.standard_normal((len(fy),)+m.shape)
+        # model = truth + fixed per-model bias + spatially varying trend + noise
+        arr = m[None] + b[None] + tr*(fy_all-1990)[:, None, None] + sd*rng.standard_normal((len(fy_all),)+m.shape)
         if tok == 'rx5day': arr = np.clip(arr, 1, None)
-        d = f'{root}/CCKP/CMIP6/{tok}/{model}-{ens}-ssp585'; os.makedirs(d, exist_ok=True)
-        xr.Dataset({f'timeseries-{tok}-annual-mean': (['time', 'lat', 'lon'], arr)},
-                   coords={'time': tf, 'lat': lat, 'lon': lon}).to_netcdf(
-            f'{d}/timeseries-{tok}-annual-mean_cmip6-x0.25_{model}-{ens}-ssp585_timeseries_mean_2015-2100.nc')
+        for exp, y0, y1 in [('historical', 1950, 2014), ('ssp585', 2015, 2100)]:
+            sl = (fy_all >= y0) & (fy_all <= y1)
+            d = f'{root}/CCKP/CMIP6/{tok}/{model}-{ens}-{exp}'; os.makedirs(d, exist_ok=True)
+            xr.Dataset({f'timeseries-{tok}-annual-mean': (['time', 'lat', 'lon'], arr[sl])},
+                       coords={'time': xr.date_range(f'{y0}-01-01', periods=int(sl.sum()), freq='YS'),
+                               'lat': lat, 'lon': lon}).to_netcdf(
+                f'{d}/timeseries-{tok}-annual-mean_cmip6-x0.25_{model}-{ens}-{exp}_timeseries_mean_{y0}-{y1}.nc')
 print('ok')

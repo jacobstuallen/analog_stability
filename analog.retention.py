@@ -10,8 +10,11 @@
 #
 # Metric (confirmed design): future-state resemblance with a FIXED RULER.
 #   For focal f, analog a, model, GWL:
-#     future_f = CMIP6 future climatology at f (per-model 20yr GWL window)
-#     future_a = CMIP6 future climatology at a
+#     future_f = future climatology at f (per-model 20yr GWL window)
+#     future_a = future climatology at a
+#     In the default delta mode (analog_config.FUTURE_MODE) each future is
+#     ERA5 1991-2020 + the model's own change, so model bias cancels and a
+#     pair diverges only through differing changes.
 #     sigma_fut = dissimilarity(future_a, future_f), scored in f's HISTORICAL
 #                 ICV PC space (same Mahony whitening as selection/method 1).
 #   The historical ICV is the fixed ruler: holding it constant between present
@@ -82,7 +85,7 @@ nlat, nlon = len(lat_arr), len(lon_arr)
 # ==============================
 # Load CMIP6 future GWL climatologies per model
 # ==============================
-future_ens, models_used = load_future_gwl(bmin, bmax, GWLS)   # (n_models, nlat, nlon)
+future_ens, models_used = load_future_gwl(bmin, bmax, GWLS, clim_mean=clim_mean)   # (n_models, nlat, nlon)
 n_models = len(models_used)
 
 # lookup analog lat/lon value -> grid index
@@ -231,6 +234,11 @@ ds_out.attrs['variables'] = ', '.join(VKEYS)
 ds_out.attrs['n_models'] = n_models
 ds_out.attrs['models'] = ', '.join(models_used)
 ds_out.attrs['scenario'] = scenario
+ds_out.attrs['future_mode'] = cfg.FUTURE_MODE
+ds_out.attrs['future_definition'] = (
+    'delta: ERA5 1991-2020 mean + (model GWL window - model 1991-2020 mean; '
+    'historical 1991-2014 + scenario 2015-2020), log1p space for log variables. '
+    'raw: model GWL window as-is.')
 ds_out.attrs['dt_grid'] = ', '.join(f'{d}' for d in DT_GRID)
 ds_out.to_netcdf(outfile)
 print(f'\nSaved: {outfile}')

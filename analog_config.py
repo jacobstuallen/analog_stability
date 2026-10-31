@@ -41,6 +41,16 @@ MIN_BIOME_CELLS = 500               # skip biomes with fewer valid cells
 BUFFER_KM = 250.0                   # trivial-neighbor exclusion
 SCENARIO = 'ssp585'
 
+# How future climatologies are built (see analog_common.load_future_gwl):
+#   'delta': ERA5 1991-2020 mean + (model GWL window - model 1991-2020 window).
+#            Removes each model's bias, so a pair can only diverge through
+#            differing CHANGES. Default for all results.
+#   'raw'  : model GWL window as-is (pre-2026-11 behavior). Kept only to show
+#            how much of the old signal was model bias.
+FUTURE_MODE = os.environ.get('ANALOG_FUTURE_MODE', 'delta')
+MODEL_HIST_END = 2014   # last year in the CCKP historical files; later years
+                        # of the baseline come from the scenario run
+
 # Analog set selection
 N_ANALOGS = 10
 SIGMA_CEILING = 1.0
@@ -121,7 +131,10 @@ GWL_WINDOWS = {
     'gwl2': {m: (w[0], w[1]) for m, w in _GWL23.items()},
     'gwl3': {m: (w[2], w[3]) for m, w in _GWL23.items()},
 }
-GWLS = ['gwl2', 'gwl3']
+# 'gwl0' is the baseline window itself (sanity check: in delta mode it must
+# reproduce ERA5 exactly, so retention(Dt > 1) = 1). Not a real warming level.
+GWL_WINDOWS['gwl0'] = {m: (CLIM_START, CLIM_END) for m in _GWL23}
+GWLS = os.environ.get('ANALOG_GWLS', 'gwl2,gwl3').split(',')
 
 # ==============================
 # Biomes (WWF major habitat types; 98/99 lake/rock-ice codes not analyzed)

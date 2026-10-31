@@ -21,6 +21,13 @@ sigma dissimilarity) stay analogs under global warming levels?
 Paths can be overridden with `ANALOG_DATA_ROOT`, `ANALOG_OUT_DIR`,
 `ANALOG_BIOME_FILE` and `ANALOG_ECO_FILE`.
 
+## Future climatologies
+`FUTURE_MODE` (env `ANALOG_FUTURE_MODE`) is `delta` by default: ERA5
+1991-2020 + (model GWL window - model 1991-2020 window, historical + SSP
+years). `raw` uses model output as-is and is kept only for comparison.
+`ANALOG_GWLS` picks warming levels (default `gwl2,gwl3`; `gwl0` is the
+baseline sanity check).
+
 ## Regression check
     python tests/make_synth.py /tmp/synth
     export ANALOG_DATA_ROOT=/tmp/synth ANALOG_OUT_DIR=/tmp/out \
@@ -28,6 +35,8 @@ Paths can be overridden with `ANALOG_DATA_ROOT`, `ANALOG_OUT_DIR`,
     for s in analog.historical.sigma.2var.py analog.set.selection.py \
              analog.retention.py analog.future.stability.py; do python $s; done
     python tests/compare_outputs.py <reference_out_dir> /tmp/out
+    # delta-mode sanity check (run retention + stability with ANALOG_GWLS=gwl0,gwl2,gwl3)
+    python tests/check_gwl0.py /tmp/out
 
 ## Data not in the repo
 TNC terrestrial ecoregions shapefile (`ecoregion/shp/`), all NetCDF inputs and

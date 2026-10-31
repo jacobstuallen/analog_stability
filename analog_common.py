@@ -129,35 +129,75 @@ def load_era5_icv(bmin, bmax, verbose=True):
 
 
 def cckp_ts_path(token, model, ensemble, scen):
-    """CCKP CMIP6 future annual timeseries file for one model + scenario."""
+    """CCKP CMIP6 annual timeseries file for one model + experiment.
+    scen = 'historical' (1950-2014) or a scenario such as 'ssp585' (2015-2100)."""
     folder = f'{model}-{ensemble}-{scen}'
+    years = '1950-2014' if scen == 'historical' else '2015-2100'
     fname = (f'timeseries-{token}-annual-mean_cmip6-x0.25_'
-             f'{model}-{ensemble}-{scen}_timeseries_mean_2015-2100.nc')
+             f'{model}-{ensemble}-{scen}_timeseries_mean_{years}.nc')
     return os.path.join(cfg.CCKP_CMIP6, token, folder, fname)
 
 
-def load_ts_window(filepath, varname, ys, ye, lat_min, lat_max):
-    """Mean over [ys, ye] inclusive of a CCKP annual timeseries -> (nlat,nlon)."""
+def _read_years(filepath, varname, ys, ye, lat_min, lat_max):
+    """Annual values for [ys, ye] inclusive -> (T, nlat, nlon), or None if
+    the file has no years in range."""
     ds = xr.open_dataset(filepath).sortby('lat').sel(lat=slice(lat_min, lat_max))
     da = ds[varname] if varname in ds else ds[
         [v for v in ds.data_vars if 'bnds' not in v and ds[v].ndim >= 2][0]]
-    w = da.sel(time=slice(str(ys), str(ye))).mean(dim='time').values
+    da = da.sel(time=slice(str(ys), str(ye)))
+    arr = da.values.astype(np.float64) if da.sizes['time'] > 0 else None
     ds.close()
-    if w.ndim == 3:
-        w = w.squeeze()
-    return w
+    return arr
 
 
-def load_future_gwl(bmin, bmax, gwls=None, verbose=True):
+def model_window_mean(vk, model, ens, ys, ye, lat_min, lat_max):
+    """Model climatology over [ys, ye] for variable vk, spanning the
+    historical and scenario files as needed. QC and log1p are applied to each
+    YEAR before averaging, the same order as the ERA5 climatology (mean of
+    log1p, not log1p of mean)."""
+    v = cfg.VARIABLES[vk]
+    varname = f'timeseries-{v["cckp_token"]}-annual-mean'
+    parts = []
+    if ys <= cfg.MODEL_HIST_END:
+        parts.append(_read_years(cckp_ts_path(v['cckp_token'], model, ens, 'historical'),
+                                 varname, ys, min(ye, cfg.MODEL_HIST_END), lat_min, lat_max))
+    if ye > cfg.MODEL_HIST_END:
+        parts.append(_read_years(cckp_ts_path(v['cckp_token'], model, ens, cfg.SCENARIO),
+                                 varname, max(ys, cfg.MODEL_HIST_END + 1), ye, lat_min, lat_max))
+    arr = np.concatenate([p for p in parts if p is not None], axis=0)
+    nexp = ye - ys + 1
+    if arr.shape[0] != nexp:
+        raise ValueError(f'{model} {vk}: {arr.shape[0]} years in {ys}-{ye}, expected {nexp}')
+    arr[arr > v['qc_max']] = np.nan
+    if v['log']:
+        arr = np.log1p(arr)
+    with np.errstate(invalid='ignore'):
+        return np.nanmean(arr, axis=0)
+
+
+def load_future_gwl(bmin, bmax, gwls=None, clim_mean=None, mode=None, verbose=True):
     """Per-model GWL-window climatologies for every variable.
 
-    A model is used only if it has a window for EVERY requested GWL and a
-    file for every variable, so all GWLs share one model list.
+    mode 'delta' (default, cfg.FUTURE_MODE):
+        future = ERA5 clim_mean + (model GWL window - model CLIM_START-CLIM_END)
+        Needs clim_mean (from load_era5_icv). The model baseline spans
+        historical + scenario runs to cover exactly the ERA5 years. In log
+        space for log variables, so Rx5day changes are multiplicative.
+    mode 'raw':
+        future = model GWL window (model biases included).
+
+    A model is used only if it has a window for EVERY requested GWL and all
+    needed files, so all GWLs share one model list.
 
     Returns future_ens[gwl][vk] -> (n_models, nlat, nlon), models_used."""
     gwls = gwls or cfg.GWLS
+    mode = mode or cfg.FUTURE_MODE
+    if mode not in ('delta', 'raw'):
+        raise ValueError(f'unknown FUTURE_MODE {mode!r}')
+    if mode == 'delta' and clim_mean is None:
+        raise ValueError("mode='delta' needs clim_mean from load_era5_icv")
     if verbose:
-        print('\nLoading CMIP6 future GWL climatologies...')
+        print(f'\nLoading CMIP6 GWL climatologies (mode={mode})...')
     stack = {g: {vk: [] for vk in cfg.VKEYS} for g in gwls}
     models_used = []
     for model, ens in cfg.MODELS.items():
@@ -166,9 +206,11 @@ def load_future_gwl(bmin, bmax, gwls=None, verbose=True):
             if verbose:
                 print(f'  {model}: no {scen_label()} window for {no_win}, skipping')
             continue
-        paths = {vk: cckp_ts_path(cfg.VARIABLES[vk]['cckp_token'], model, ens, cfg.SCENARIO)
-                 for vk in cfg.VKEYS}
-        missing = [vk for vk, p in paths.items() if not os.path.exists(p)]
+        exps = [cfg.SCENARIO, 'historical'] if mode == 'delta' else [cfg.SCENARIO]
+        if mode == 'raw' and any(cfg.GWL_WINDOWS[g][model][0] <= cfg.MODEL_HIST_END for g in gwls):
+            exps.append('historical')
+        missing = [(vk, e) for vk in cfg.VKEYS for e in exps
+                   if not os.path.exists(cckp_ts_path(cfg.VARIABLES[vk]['cckp_token'], model, ens, e))]
         if missing:
             if verbose:
                 print(f'  {model}: missing {missing}, skipping')
@@ -178,20 +220,21 @@ def load_future_gwl(bmin, bmax, gwls=None, verbose=True):
                              f'{cfg.GWL_WINDOWS[g][model][1]}' for g in gwls)
             print(f'  {model} ({wtxt})...', end=' ', flush=True)
         for vk in cfg.VKEYS:
-            v = cfg.VARIABLES[vk]
+            base = (model_window_mean(vk, model, ens, cfg.CLIM_START, cfg.CLIM_END, bmin, bmax)
+                    if mode == 'delta' else None)
             for g in gwls:
                 ys, ye = cfg.GWL_WINDOWS[g][model]
-                w = load_ts_window(paths[vk], f'timeseries-{v["cckp_token"]}-annual-mean',
-                                   ys, ye, bmin, bmax)
-                w[w > v['qc_max']] = np.nan
-                if v['log']:
-                    w = np.log1p(w)
+                w = model_window_mean(vk, model, ens, ys, ye, bmin, bmax)
+                if mode == 'delta':
+                    w = clim_mean[vk] + (w - base)
                 stack[g][vk].append(w)
         models_used.append(model)
         if verbose:
             print('OK')
     if verbose:
         print(f'  Loaded {len(models_used)} models')
+    if not models_used:
+        raise RuntimeError('no CMIP6 models loaded; check paths and windows')
     future_ens = {g: {vk: np.stack(stack[g][vk], axis=0) for vk in cfg.VKEYS}
                   for g in gwls}
     return future_ens, models_used

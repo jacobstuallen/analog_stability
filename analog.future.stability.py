@@ -4,7 +4,8 @@
 # Builds on analog_historical_sigma.py. For each grid cell we:
 #   1. Take its FUTURE climate vector at GWL2 and GWL3 (per-model 20-year
 #      mean over each model's GWL crossing window, Tye et al. 2025
-#      Appendix B, ensemble-mean periods, SSP5-8.5).
+#      Appendix B, SSP5-8.5). Default delta mode: ERA5 1991-2020 + model
+#      change, so model bias does not enter (analog_config.FUTURE_MODE).
 #   2. Standardize that future vector by the cell's OWN historical
 #      1991-2020 ERA5 ICV (s_jk), preserving the metric in historical
 #      units (Methods 2.5).
@@ -66,7 +67,7 @@ nlat, nlon = len(lat_arr), len(lon_arr)
 # ==============================
 # Load CMIP6 future GWL climatologies per model
 # ==============================
-future_ens, models_used = load_future_gwl(bmin, bmax, GWLS)   # (n_models, nlat, nlon)
+future_ens, models_used = load_future_gwl(bmin, bmax, GWLS, clim_mean=clim_mean)   # (n_models, nlat, nlon)
 n_models = len(models_used)
 
 # ==============================
@@ -227,6 +228,11 @@ ds_out.attrs['variables'] = ', '.join(VKEYS)
 ds_out.attrs['n_models'] = n_models
 ds_out.attrs['models'] = ', '.join(models_used)
 ds_out.attrs['scenario'] = scenario
+ds_out.attrs['future_mode'] = cfg.FUTURE_MODE
+ds_out.attrs['future_definition'] = (
+    'delta: ERA5 1991-2020 mean + (model GWL window - model 1991-2020 mean; '
+    'historical 1991-2014 + scenario 2015-2020), log1p space for log variables. '
+    'raw: model GWL window as-is.')
 ds_out.attrs['icv_definition'] = cfg.ICV_DEFINITION
 ds_out.attrs['sigma_saturation'] = (
     'sigma = norm.ppf(0.5 + chi.cdf(D,df=m)/2) saturates at sigma_cap=%s. Above '

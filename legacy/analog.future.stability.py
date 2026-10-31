@@ -33,7 +33,9 @@ import xarray as xr
 import os
 import time
 
-import analog_config as cfg
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import analog_config as cfg  # noqa: E402
 from analog_common import (load_biomes, load_era5_icv, load_future_gwl,
                            grid_index_lookup, sigma_from_distance)
 

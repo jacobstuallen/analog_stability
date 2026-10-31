@@ -47,10 +47,12 @@ import numpy as np
 import xarray as xr
 import os
 import time
+import warnings
 
 import analog_config as cfg
 from analog_common import (load_biomes, load_era5_icv, load_future_gwl,
-                           grid_index_lookup, dt_grid, pc_sigma,
+                           grid_index_lookup, dt_grid, pc_sigma, pc_whiten,
+                           sigma_by_dims,
                            focal_eig as _focal_eig)
 
 # ==============================
@@ -106,6 +108,14 @@ for g in GWLS:
     out[f'dircong_{g}']  = np.full((nlat, nlon), np.nan, np.float32)   # cos angle
     # mean future sigma across the analog set (context for the curve)
     out[f'meansigma_{g}'] = np.full((nlat, nlon), np.nan, np.float32)
+    # departure vs divergence (all whitened in focal ICV PC space, unsaturated
+    # Mahalanobis units unless noted). Future pair difference = h + v, with
+    # h = historical difference and v = change_a - change_f (pair divergence).
+    out[f'departure_{g}'] = np.full((nlat, nlon), np.nan, np.float32)        # |change_f|
+    out[f'departure_sigma_{g}'] = np.full((nlat, nlon), np.nan, np.float32)  # same, as sigma
+    out[f'divergence_{g}'] = np.full((nlat, nlon), np.nan, np.float32)       # |v|, median over analogs
+    out[f'comove_{g}'] = np.full((nlat, nlon), np.nan, np.float32)           # 1-|v|^2/(|ca|^2+|cf|^2)
+    out[f'futdist_{g}'] = np.full((nlat, nlon), np.nan, np.float32)          # |h+v|, median over analogs
 
 
 def focal_eig(vlat, vlon):
@@ -157,6 +167,11 @@ for b, bname in biomes.items():
         magr_m = np.full((n_models, n), np.nan, np.float32)
         dirc_m = np.full((n_models, n), np.nan, np.float32)
         msig_m = np.full((n_models, n), np.nan, np.float32)
+        dep_m = np.full((n_models, n), np.nan, np.float32)
+        deps_m = np.full((n_models, n), np.nan, np.float32)
+        div_m = np.full((n_models, n), np.nan, np.float32)
+        com_m = np.full((n_models, n), np.nan, np.float32)
+        fdist_m = np.full((n_models, n), np.nan, np.float32)
 
         for mi in range(n_models):
             # per-analog future sigma + attribution, then aggregate over analogs
@@ -166,6 +181,15 @@ for b, bname in biomes.items():
             # focal delta magnitude in std space (n,)
             df_std = delta_f[mi] / sd               # (n,K)
             df_norm = np.sqrt(np.nansum(df_std**2, axis=1))
+            # focal change whitened in its own ICV PC space -> local departure
+            wf, keepf = pc_whiten(delta_f[mi], sd, evals, evecs)        # (n,K)
+            wf2 = np.sum(wf**2, axis=1)
+            dep = np.sqrt(wf2)
+            dep_m[mi] = dep
+            deps_m[mi] = sigma_by_dims(dep, keepf.sum(axis=1))
+            div_a = np.full((n, N_SET), np.nan)      # |v| per analog
+            com_a = np.full((n, N_SET), np.nan)      # co-movement per analog
+            fd_a = np.full((n, N_SET), np.nan)       # |h+v| per analog
             for r in range(N_SET):
                 ok = (ali[:, r] >= 0) & (alj[:, r] >= 0) & (r < nfound)
                 if ok.sum() == 0:
@@ -184,6 +208,15 @@ for b, bname in biomes.items():
                     mag_a[ok, r] = da_norm / df_norm[ok]
                     dot = np.nansum(da_std * df_std[ok], axis=1)
                     dir_a[ok, r] = dot / (da_norm * df_norm[ok])
+                # departure / divergence decomposition (whitened, focal space)
+                wa, _ = pc_whiten(fa - ha, sd[ok], evals[ok], evecs[ok])    # analog change
+                wh, _ = pc_whiten(ha - mu[ok], sd[ok], evals[ok], evecs[ok])  # historical diff
+                v = wa - wf[ok]
+                v2 = np.sum(v**2, axis=1)
+                div_a[ok, r] = np.sqrt(v2)
+                fd_a[ok, r] = np.sqrt(np.sum((wh + v)**2, axis=1))
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    com_a[ok, r] = 1.0 - v2 / (np.sum(wa**2, axis=1) + wf2[ok])
 
             # retention curve: fraction of found analogs with sigma < Dt
             for di, Dt in enumerate(DT_GRID):
@@ -194,6 +227,11 @@ for b, bname in biomes.items():
             magr_m[mi] = np.nanmean(mag_a, axis=1)
             dirc_m[mi] = np.nanmean(dir_a, axis=1)
             msig_m[mi] = np.nanmean(sig_a, axis=1)
+            with warnings.catch_warnings():      # cells with no finite analog -> NaN
+                warnings.simplefilter('ignore', RuntimeWarning)
+                div_m[mi] = np.nanmedian(div_a, axis=1)
+                com_m[mi] = np.nanmedian(com_a, axis=1)
+                fdist_m[mi] = np.nanmedian(fd_a, axis=1)
 
         out[f'retention_{g}'][vlat, vlon, :]     = np.nanmedian(ret_curve_m, axis=0)
         out[f'retention_{g}_p10'][vlat, vlon, :] = np.nanpercentile(ret_curve_m, 10, axis=0)
@@ -201,13 +239,20 @@ for b, bname in biomes.items():
         out[f'magratio_{g}'][vlat, vlon] = np.nanmedian(magr_m, axis=0)
         out[f'dircong_{g}'][vlat, vlon]  = np.nanmedian(dirc_m, axis=0)
         out[f'meansigma_{g}'][vlat, vlon] = np.nanmedian(msig_m, axis=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            for k, arr in [('departure', dep_m), ('departure_sigma', deps_m),
+                           ('divergence', div_m), ('comove', com_m), ('futdist', fdist_m)]:
+                out[f'{k}_{g}'][vlat, vlon] = np.nanmedian(arr, axis=0)
 
         # quick read at the DT_SLICES
         slc = []
         for Dt in DT_SLICES:
             di = int(np.argmin(np.abs(DT_GRID - Dt)))
             slc.append(f'Dt={Dt}:{np.nanmean(out[f"retention_{g}"][vlat,vlon,di]):.2f}')
-        print(f'  {g}: mean retention {" ".join(slc)} | dir={np.nanmean(out[f"dircong_{g}"][vlat,vlon]):.2f}')
+        med = {k: np.nanmedian(out[f'{k}_{g}'][vlat, vlon]) for k in ['departure', 'divergence', 'comove']}
+        print(f'  {g}: mean retention {" ".join(slc)} | departure {med["departure"]:.2f} '
+              f'divergence {med["divergence"]:.2f} comove {med["comove"]:.2f}')
     print(f'  done | {time.time()-t0:.0f}s')
 
 # ==============================
@@ -229,7 +274,12 @@ ds_out.attrs['method'] = (
     'within Dt sigma of the focal cell FUTURE climatology, swept over Dt. '
     'Per-model (SSP5-8.5 GWL windows, see gwl_source) then ensemble median/p10/p90. '
     'Attribution: magratio (|delta_a|/|delta_f|) and dircong (cos angle of '
-    'delta_a vs delta_f) in focal-std space, mean over the analog set.')
+    'delta_a vs delta_f) in focal-std space, mean over the analog set. '
+    'Departure/divergence (whitened focal ICV PC space, Mahalanobis units): '
+    'departure=|change_f| (focal future vs own past); divergence=|change_a - change_f|; '
+    'comove=1-divergence^2/(|change_a|^2+|change_f|^2) (1 identical change, 0 unrelated, '
+    '<0 opposite); futdist=|future_a - future_f|. Per model: median over analogs; then '
+    'ensemble median.')
 ds_out.attrs['icv_definition'] = cfg.ICV_DEFINITION
 ds_out.attrs['variables'] = ', '.join(VKEYS)
 ds_out.attrs['scenario'] = scenario
@@ -269,6 +319,19 @@ for b, bname in biomes.items():
             row += f' {np.nanmean(out[f"retention_{g}"][bm, di]):>7.2f}'
     for g in GWLS:
         row += f' {np.nanmean(out[f"dircong_{g}"][bm]):>6.2f}'
+    print(row)
+
+warnings.simplefilter('ignore', RuntimeWarning)   # comove is NaN at gwl0 (no change)
+print('\n--- Per-biome departure vs divergence (cell medians) ---')
+print(f'{"biome":<46}' + ''.join(f' {"dep" + g[3:]:>7} {"div" + g[3:]:>7} {"com" + g[3:]:>7}' for g in GWLS))
+for b, bname in biomes.items():
+    bm = (biome_grid == b) & (N_FOUND > 0)
+    if bm.sum() == 0 or not np.isfinite(out[f'departure_{GWLS[0]}'][bm]).any():
+        continue
+    row = f'{bname:<46}'
+    for g in GWLS:
+        for k in ['departure', 'divergence', 'comove']:
+            row += f' {np.nanmedian(out[f"{k}_{g}"][bm]):>7.2f}'
     print(row)
 
 print('\nDone.')

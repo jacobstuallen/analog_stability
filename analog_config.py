@@ -100,7 +100,8 @@ MODELS = {
     'kace-1-0-g': 'r1i1p1f1', 'kiost-esm': 'r1i1p1f1', 'miroc-es2l': 'r1i1p1f2',
     'miroc6': 'r1i1p1f1', 'mpi-esm1-2-hr': 'r1i1p1f1', 'mpi-esm1-2-lr': 'r1i1p1f1',
     'mri-esm2-0': 'r1i1p1f1', 'nesm3': 'r1i1p1f1', 'noresm2-lm': 'r1i1p1f1',
-    'noresm2-mm': 'r1i1p1f1', 'taiesm1': 'r1i1p1f1', 'ukesm1-0-ll': 'r1i1p1f2',
+    'noresm2-mm': 'r1i1p1f1', 'ukesm1-0-ll': 'r1i1p1f2',
+    # taiesm1 removed 2026-10-31: no CCKP txx/rx5day files exist for it
 }
 
 # ==============================

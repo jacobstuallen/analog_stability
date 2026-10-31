@@ -8,12 +8,14 @@ sigma dissimilarity) stay analogs under global warming levels?
   method constants. Edit here, not in the scripts.
 - `analog_common.py`, `icv_utils.py`: shared loading and distance code.
 - Pipeline, in order:
-  1. `analog.historical.sigma.2var.py`: single best historical analog per cell.
+  1. `analog.historical.sigma.2var.py`: single best historical analog per cell
+     (methods context and Dt calibration distributions only).
   2. `analog.set.selection.py`: diverse top-N analog sets -> `analog_sets.nc`.
-  3. `analog.retention.py`: retention of each set under GWLs.
-  4. `analog.future.stability.py`: future focal vs historical best analog.
-  5. `analog.scaling.py`: linear-scaling test of pair divergence with GWL
+  3. `analog.retention.py`: retention of each set under GWLs, plus local
+     departure, pair divergence and co-movement -> `analog_retention.nc`.
+  4. `analog.scaling.py`: linear-scaling test of pair divergence with GWL
      (GWL1.5-4, common models, delta mode) -> `analog_scaling.nc`.
+- `legacy/`: retired single-best-analog stability pipeline (first draft).
 - `diag.*.py`: diagnostics. `plot/`: figures. `ecoregion/`: ecoregion gridding.
 - `tests/`: synthetic-data regression check (see below).
 
@@ -43,9 +45,9 @@ that reach all requested GWLs (outputs get a `_common` suffix).
     export ANALOG_DATA_ROOT=/tmp/synth ANALOG_OUT_DIR=/tmp/out \
            ANALOG_BIOME_FILE=/tmp/synth/biomes/biomes.analog.gridded.nc
     for s in analog.historical.sigma.2var.py analog.set.selection.py \
-             analog.retention.py analog.future.stability.py; do python $s; done
+             analog.retention.py analog.scaling.py; do python $s; done
     python tests/compare_outputs.py <reference_out_dir> /tmp/out
-    # delta-mode sanity check (run retention + stability with ANALOG_GWLS=gwl0,gwl2,gwl3)
+    # delta-mode sanity check (run retention with ANALOG_GWLS=gwl0,gwl2,gwl3)
     python tests/check_gwl0.py /tmp/out
     # statistics behind analog.scaling.py
     python tests/check_scaling_stats.py

@@ -51,6 +51,8 @@ that reach all requested GWLs (outputs get a `_common` suffix).
     python tests/check_gwl0.py /tmp/out
     # statistics behind analog.scaling.py
     python tests/check_scaling_stats.py
+    # per-variable Mahalanobis shares (attribution)
+    python tests/check_var_shares.py
 
 ## Data not in the repo
 TNC terrestrial ecoregions shapefile (`ecoregion/shp/`), all NetCDF inputs and

@@ -66,6 +66,23 @@ def pc_whiten(diff, sd, evals, evecs):
     return w, keep
 
 
+def mahal_var_shares(diff, sd, evals, evecs):
+    """Per-variable contributions to a squared Mahalanobis distance in each
+    focal cell's ICV space: c_k = z_k * (S+ z)_k with z = diff/sd and S+ the
+    PC-truncated inverse ICV correlation matrix. sum_k c_k = D^2 exactly.
+    Shares c_k / D^2 sum to 1; with correlated ICV one share can fall outside
+    [0, 1] (the other variable then partly offsets it).
+    Returns c (n,K) and D^2 (n,)."""
+    z = diff / sd
+    keep = evals >= cfg.PC_VAR_MIN
+    with np.errstate(invalid='ignore', divide='ignore'):
+        inv = np.where(keep, 1.0 / np.where(keep, evals, 1.0), 0.0)        # (n,K)
+    proj = np.einsum('nk,nkm->nm', z, evecs)                               # z in PC basis
+    sz = np.einsum('nkm,nm->nk', evecs, proj * inv)                        # S+ z
+    c = z * sz
+    return c, np.sum(c, axis=1)
+
+
 def pc_distance(diff, sd, evals, evecs):
     """Mahalanobis distance of raw difference vectors in each focal cell's
     ICV PC space. diff, sd (n,K); evals (n,K); evecs (n,K,K).

@@ -4,7 +4,8 @@
 # Three figures:
 #   (1) retention_maps.png   : retention at GWL2 & GWL3, strict (Dt=1) and
 #       loose (Dt=2) thresholds. The headline "where do analogs survive".
-#   (2) attribution_maps.png : magratio and dircong at GWL3, side by side, so
+#   (2) attribution_maps.png : at GWL3, the TXx share of pair divergence and
+#       divergence on one global ICV ruler (ICV-free check, issue B), so
 #       low-retention regions can be read as magnitude- vs direction-driven.
 #   (3) retention_curves.png : retention(Dt) curves per biome, the honest
 #       threshold-free object (no single Dt assumed).
@@ -140,20 +141,24 @@ fig.savefig(f1, dpi=400, bbox_inches='tight'); plt.close(fig)
 print(f'Saved: {f1}')
 
 # ==============================
-# FIG 2: attribution at GWL3 (magnitude vs direction)
+# FIG 2: attribution at GWL3 (which variable; is it the ICV ruler?)
 # ==============================
 fig, axes = plt.subplots(1, 2, figsize=(15, 4.5), subplot_kw=proj)
-# magratio: clip to a readable range; ~1 means analog changes as much as focal
-magr = ds['magratio_gwl3'].values.copy()
-magr = np.clip(magr, 0, 2)
-add_map(axes[0], masked_field(magr), 'PuOr', 0.0, 2.0,
-        'GWL3 magnitude ratio  |dA|/|dF|  (1 = same pace)',
-        '|delta_analog| / |delta_focal|')
-# dircong: -1..1, 1 = same direction
-add_map(axes[1], masked_field(ds['dircong_gwl3'].values), 'RdBu', -1.0, 1.0,
-        'GWL3 direction congruence  cos(dF,dA)  (1 = same way)',
-        'cosine of change-vector angle')
-fig.suptitle('Why retention fails: magnitude vs direction of change (GWL3)', fontsize=12)
+# TXx share of divergence^2: 1 = all TXx, 0 = all Rx5day (can leave [0,1]
+# slightly when ICV is correlated)
+pm0 = add_map(axes[0], masked_field(ds['share_txx_div_gwl3'].values), 'PuOr', 0.0, 1.0,
+              'a) GWL3 TXx share of pair divergence (0 = all Rx5day)',
+              'share of divergence$^2$')
+plt.colorbar(pm0, ax=axes[0], orientation='horizontal', shrink=0.6, pad=0.04,
+             label='TXx share of divergence$^2$')
+# divergence on one global ICV ruler: if the tropical maximum survives here,
+# it is not an artifact of small local ICV
+dc = ds['divcommon_gwl3'].values
+pm1 = add_map(axes[1], masked_field(dc), 'viridis', 0.0, float(np.nanpercentile(dc[keep], 98)),
+              'b) GWL3 pair divergence, one global ICV ruler',
+              'divergence (global-ICV units)')
+plt.colorbar(pm1, ax=axes[1], orientation='horizontal', shrink=0.6, pad=0.04,
+             label='divergence (global-ICV units)')
 fig.tight_layout()
 f2 = os.path.join(out_dir, 'attribution_maps.png')
 fig.savefig(f2, dpi=130, bbox_inches='tight'); plt.close(fig)

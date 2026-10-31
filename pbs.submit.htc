@@ -1,14 +1,16 @@
 #!/bin/bash
-#PBS -N analog_set_selection
+#PBS -N analog
 #PBS -A NRIS0001
 #PBS -j oe
 #PBS -q casper
 #PBS -l walltime=05:00:00
 #PBS -l select=1:ncpus=1:mem=120GB
+#
+# Usage (from the repo directory):
+#   qsub -v SCRIPT=analog.set.selection.py pbs.submit.htc
 
-### specify desired module environment
 module load conda
 conda activate earth
 
-### Run Program
-python /glade/u/home/jsallen/projects/tnc_2025/draft_03/analog.set.selection.py
+cd "$PBS_O_WORKDIR"
+python "${SCRIPT:?set SCRIPT=<script.py> with qsub -v}"

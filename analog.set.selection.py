@@ -48,117 +48,44 @@ import numpy as np
 import xarray as xr
 import os
 import time
-from scipy.stats import chi, norm
-from icv_utils import detrend_icv, build_icv_corr
+
+import analog_config as cfg
+from analog_common import (load_biomes, load_era5_icv, haversine_km,
+                           sigma_from_distance)
 
 # ==============================
-# Configuration  
+# Configuration (edit in analog_config.py; aliased here)
 # ==============================
-data_root = '/glade/campaign/ral/risc/jsallen/TNC'
-biome_file = '/glade/u/home/jsallen/projects/tnc_2025/analogs/biomes/biomes.analog.gridded.nc'
-out_dir = f'{data_root}/analog_stability'
-outfile = os.path.join(out_dir, 'analog_sets.nc')
-
-clim_start, clim_end = 1991, 2020
-pc_var_min = 0.01
-min_biome_cells = 500
-sigma_cap = 8.0
+out_dir = cfg.OUT_DIR
+outfile = cfg.SETS_FILE
+clim_start, clim_end = cfg.CLIM_START, cfg.CLIM_END
+pc_var_min = cfg.PC_VAR_MIN
+min_biome_cells = cfg.MIN_BIOME_CELLS
+sigma_cap = cfg.SIGMA_CAP
 
 # ---- selection knobs ----
-N_ANALOGS = 10            # target set size (design choice; diagnostic showed
-                          # no quality knee, and Frontiers 2023 found N=10-100
-                          # had minimal effect -> N is set for practicality)
-BUFFER_KM = 250.0         # trivial-neighbor exclusion (diagnostic decorr result)
-SIGMA_CEILING = 1.0       # quality gate (Parks 2022 <0.5 good; we use ~1 loose)
-S_TRY = [500.0, 400.0, 300.0, 250.0]   # spacing relaxation ladder, floor=buffer
-DECORR_KM = 400.0         # spatial scale for effective-N downweighting
-                          # (~median r<1/e from the diagnostic). ADJUSTABLE.
-focal_chunk = 2000        # focal cells processed per progress print
+N_ANALOGS = cfg.N_ANALOGS          # target set size (practicality; no quality knee)
+BUFFER_KM = cfg.BUFFER_KM          # trivial-neighbor exclusion (decorrelation result)
+SIGMA_CEILING = cfg.SIGMA_CEILING  # quality gate (Parks 2022 <0.5 good; ~1 loose)
+S_TRY = cfg.S_TRY                  # spacing relaxation ladder, floor = buffer
+DECORR_KM = cfg.DECORR_KM          # spatial scale for effective-N downweighting
+focal_chunk = 2000                 # focal cells processed per progress print
 
-VARIABLES = {
-    'txx': {
-        'era5_ts':  f'{data_root}/CCKP/ERA5/timeseries-txx-annual-mean_era5-x0.25_era5-x0.25-historical_timeseries_mean_1950-2024.nc',
-        'era5_var': 'timeseries-txx-annual-mean',
-        'log': False,
-        'qc_max': 70.0,
-    },
-    'rx5day': {
-        'era5_ts':  f'{data_root}/CCKP/ERA5/timeseries-rx5day-annual-mean_era5-x0.25_era5-x0.25-historical_timeseries_mean_1950-2024.nc',
-        'era5_var': 'timeseries-rx5day-annual-mean',
-        'log': True,
-        'qc_max': 3000.0,
-    },
-}
-VKEYS = list(VARIABLES.keys())
-K = len(VKEYS)
-
-biomes = {
-    1:'Boreal Forests/Taiga', 2:'Deserts & Xeric Shrublands',
-    3:'Flooded Grasslands & Savannas', 4:'Mangroves',
-    5:'Mediterranean Forests, Woodlands & Scrub', 6:'Montane Grasslands & Shrublands',
-    7:'Rock and Ice', 8:'Temperate Broadleaf & Mixed Forests',
-    9:'Temperate Conifer Forests', 10:'Temperate Grasslands, Savannas & Shrublands',
-    11:'Tropical & Subtropical Coniferous Forests', 12:'Tropical & Subtropical Dry Broadleaf Forests',
-    13:'Tropical & Subtropical Grasslands, Savannas & Shrublands',
-    14:'Tropical & Subtropical Moist Broadleaf Forests', 15:'Tundra',
-}
+VKEYS, K = cfg.VKEYS, cfg.K
+biomes = cfg.BIOMES
 
 
 # ==============================
 # Helpers
 # ==============================
-def sigma_from_distance(d, m):
-    """Mahony sigma dissimilarity, half-normal convention: 0 = identical,
-    grows positive with distance. (chi-cdf -> upper-half normal quantile)."""
-    p = np.clip(chi.cdf(d, df=m), 0.0, 1.0 - 1e-15)
-    return np.clip(norm.ppf(0.5 + p/2), -sigma_cap, sigma_cap)
-
-
-def haversine_km(lat1, lon1, lat2, lon2):
-    """Great-circle distance (km). Inputs in degrees, broadcastable."""
-    R = 6371.0
-    p1 = np.radians(lat1); p2 = np.radians(lat2)
-    dphi = np.radians(lat2 - lat1)
-    dlmb = np.radians(lon2 - lon1)
-    a = np.sin(dphi/2)**2 + np.cos(p1)*np.cos(p2)*np.sin(dlmb/2)**2
-    return 2*R*np.arcsin(np.sqrt(np.clip(a, 0, 1)))
-
-
 def load_inputs():
     """Load biome grid + per-variable ERA5 ICV (clim mean, sd, correlations).
-    Same construction as method 1 / diagnostic so selection is consistent."""
-    print(f"Variables: {VKEYS} (K={K})")
+    Same construction as the historical and retention scripts."""
     print("Loading biome mask...")
-    biome_ds = xr.open_dataset(biome_file).sortby('lat')
-    bmin = float(biome_ds.lat.min()); bmax = float(biome_ds.lat.max())
-    biome_grid = biome_ds['BIOME_ID'].values
-
-    print("Loading ERA5 ICV per variable...")
-    clim_mean = {}; icv_sd = {}; icv_series = {}
-    lat_arr = lon_arr = None; nlat = nlon = T = None
-    for vk in VKEYS:
-        cfg = VARIABLES[vk]
-        ds = xr.open_dataset(cfg['era5_ts']).sortby('lat').sel(lat=slice(bmin, bmax))
-        ts = ds[cfg['era5_var']].sel(time=slice(str(clim_start), str(clim_end)))
-        if lat_arr is None:
-            lat_arr = ts.lat.values; lon_arr = ts.lon.values
-            nlat, nlon = len(lat_arr), len(lon_arr); T = ts.sizes['time']
-        arr = ts.values.astype(np.float64)
-        arr[arr > cfg['qc_max']] = np.nan
-        if cfg['log']:
-            arr = np.log1p(arr)
-        # Detrended ERA5 ICV: per-cell linear trend removed before taking the
-        # SD, so the 1991-2020 forced signal is not counted as interannual
-        # variability. clim_mean unchanged (intercept == period mean).
-        clim_mean[vk], icv_sd[vk], icv_series[vk] = detrend_icv(arr)
-        ds.close()
-
-    # Per-cell ICV cross-variable correlation from the DETRENDED anomaly series
-    # (pairwise-finite year count, ddof=2), consistent with icv_sd.
-    icv_corr = build_icv_corr(VKEYS, icv_sd, icv_series)
-
+    biome_grid, bmin, bmax = load_biomes()
+    clim_mean, icv_sd, _, icv_corr, lat_arr, lon_arr = load_era5_icv(bmin, bmax)
     return (biome_grid, clim_mean, icv_sd, icv_corr,
-            lat_arr, lon_arr, nlat, nlon)
+            lat_arr, lon_arr, len(lat_arr), len(lon_arr))
 
 
 def sigma_focal_to_candidates(fi, fj, ci, cj, clim_mean, icv_sd, icv_corr):
@@ -339,8 +266,7 @@ def write_output(analog_lat, analog_lon, analog_sig, n_found, s_used, eff_n,
         f'outside {BUFFER_KM:.0f} km buffer, quality-gated at sigma<= '
         f'{SIGMA_CEILING}, greedy spatial-spread top-{N_ANALOGS} with '
         'stepwise spacing relaxation. Feeds the analog-retention method.')
-    ds.attrs['icv_definition'] = (
-        'ERA5 1991-2020 annual index series, per grid cell, LINEARLY DETRENDED before taking the SD (ddof=2). Fixed observational ruler: the same ICV is applied to historical and to every CMIP6 model/GWL; ICV is never recomputed per model. Cross-variable ICV correlations are computed from the same detrended anomalies. Focal-cell convention (Mahony 2017): D_ji is scored in focal cell j ICV PC space and is asymmetric.')
+    ds.attrs['icv_definition'] = cfg.ICV_DEFINITION
     ds.attrs['buffer_km'] = BUFFER_KM
     ds.attrs['sigma_ceiling'] = SIGMA_CEILING
     ds.attrs['n_target'] = N_ANALOGS

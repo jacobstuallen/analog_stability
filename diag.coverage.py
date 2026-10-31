@@ -19,30 +19,19 @@
 import numpy as np
 import xarray as xr
 
-data_root = '/glade/campaign/ral/risc/jsallen/TNC'
-biome_file = ('/glade/u/home/jsallen/projects/tnc_2025/analogs/biomes/'
-              'biomes.analog.gridded.nc')
-sets_file = f'{data_root}/analog_stability/analog_sets.nc'
+import analog_config as cfg
 
-# must match analog_set_selection.py
-N_ANALOGS = 30
-BUFFER_KM = 250.0
-SIGMA_CEILING = 1.0
-min_biome_cells = 500
+biome_file = cfg.BIOME_FILE
+sets_file = cfg.SETS_FILE
+
+# shared with analog.set.selection.py via analog_config
+N_ANALOGS = cfg.N_ANALOGS   # was 30 here (stale); selection uses 10
+BUFFER_KM = cfg.BUFFER_KM
+SIGMA_CEILING = cfg.SIGMA_CEILING
+min_biome_cells = cfg.MIN_BIOME_CELLS
 COVERAGE_MIN = 10          # what the plotting script calls "low coverage"
 
-biomes = {
-    1: 'Boreal Forests/Taiga', 2: 'Deserts & Xeric Shrublands',
-    3: 'Flooded Grasslands & Savannas', 4: 'Mangroves',
-    5: 'Mediterranean Forests, Woodlands & Scrub',
-    6: 'Montane Grasslands & Shrublands', 7: 'Rock and Ice',
-    8: 'Temperate Broadleaf & Mixed Forests', 9: 'Temperate Conifer Forests',
-    10: 'Temperate Grasslands, Savannas & Shrublands',
-    11: 'Tropical & Subtropical Coniferous Forests',
-    12: 'Tropical & Subtropical Dry Broadleaf Forests',
-    13: 'Tropical & Subtropical Grasslands, Savannas & Shrublands',
-    14: 'Tropical & Subtropical Moist Broadleaf Forests', 15: 'Tundra',
-}
+biomes = cfg.BIOMES
 
 # named regions you flagged, to attribute individually
 REGIONS = {

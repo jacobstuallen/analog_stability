@@ -32,18 +32,20 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import colormaps as cmaps
 
-data_root = '/glade/campaign/ral/risc/jsallen/TNC'
-out_dir = f'{data_root}/analog_stability'
-ret_file = os.path.join(out_dir, 'analog_retention.nc')
-sets_file = os.path.join(out_dir, 'analog_sets.nc')
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import analog_config as cfg
+
+out_dir = cfg.OUT_DIR
+ret_file = cfg.RETENTION_FILE
+sets_file = cfg.SETS_FILE
 
 # Written by ecoregion_shp_to_reference.py. Must be on the SAME grid as
 # analog_retention.nc.
-#eco_file = '/glade/u/home/jsallen/projects/tnc_2025/analogs/biomes/ecoregions.analog.gridded.nc'
-eco_file = '/glade/work/jsallen/projects/tnc_2025/draft_03/ecoregion/ecoregions.analog.gridded.nc'
+eco_file = cfg.ECO_FILE
 
-N_FULL = 10           # full analog set size
-S_FULL = 500.0        # full spacing (cells below this were relaxed)
+N_FULL = cfg.N_ANALOGS   # full analog set size
+S_FULL = cfg.S_TRY[0]    # full spacing (cells below this were relaxed)
 DT_STRICT, DT_LOOSE = 1.0, 2.0
 
 MIN_COVERAGE = 0.50   # ecoregion needs >=50% of its land cells passing `keep`

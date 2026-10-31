@@ -38,103 +38,39 @@
 #    focal cell, because then it should "probably" experience the same
 #    climate change signal and that's not really the point...
 #
-# 2. The NASA-NEX-CMIP6 downscaled climat emodel's ICV is bad... I (Jacob) 
-#    have figures showing this. SO I use ERA5 based ICV instead. I don't 
-#    have good quantitative info on the difference in using GCM ICV versus
-#    ERA5 ICV, but the resulting analog maps looked mostly similar (good sign). 
-#    Biggest changes came from precip. 
+# 2. ICV comes from ERA5, not from the CMIP6 models. Across-model spread in
+#    Rx5day ICV is large, so a per-model ICV would leak model scatter into
+#    the metric. (The CMIP6 data are CCKP 0.25 deg downscaled, bias
+#    adjusted to ERA5; they are NOT NASA NEX-GDDP.)
 
 import numpy as np
 import xarray as xr
 import os
 import time
-from scipy.stats import chi, norm
-from icv_utils import detrend_icv, build_icv_corr
 
-# User variables to edit/play with
-# --------------------------------
-data_root = '/glade/campaign/ral/risc/jsallen/TNC'
-biome_file = '/glade/u/home/jsallen/projects/tnc_2025/analogs/biomes/biomes.analog.gridded.nc'
-out_dir = f'{data_root}/analog_stability'
+import analog_config as cfg
+from analog_common import (load_biomes, load_era5_icv, haversine_km,
+                           sigma_from_distance)
 
-clim_start = 1991
-clim_end   = 2020
-pc_var_min = 0.01 # remove pcs which don't explain enough variance (noise)
-min_biome_cells = 5000 # require this many cells to werk on a biome
-focal_chunk = 1000  # batch size for vector distance calc - smaller == less memory, maybe longer processing
-sigma_cap = 8.0     # Subjective (?) and would change with different #s of vars
-BUFFER_KM = 250.0   # trivial-neighbor exclusion. MUST match
-                    # analog_set_selection.py or the historical sigma map
-                    # and the analog sets are built on different rules.
-
-# ---- Variable configuration (annual extremes) ----
-# Rx5day is log1p-transformed before the ICV is computed, so its detrending
-# and standardization both happen in log space 
-# There's an option to add in a theoretically reasonable maximum value
-VARIABLES = {
-    'txx': {
-        'era5_ts':  f'{data_root}/CCKP/ERA5/timeseries-txx-annual-mean_era5-x0.25_era5-x0.25-historical_timeseries_mean_1950-2024.nc',
-        'era5_var': 'timeseries-txx-annual-mean',
-        'log': False, 'qc_max': 70.0,
-    },
-    'rx5day': {
-        'era5_ts':  f'{data_root}/CCKP/ERA5/timeseries-rx5day-annual-mean_era5-x0.25_era5-x0.25-historical_timeseries_mean_1950-2024.nc',
-        'era5_var': 'timeseries-rx5day-annual-mean',
-        'log': True, 'qc_max': 3000.0,
-    },
-}
-VKEYS = list(VARIABLES.keys())
-K = len(VKEYS)
-
-biomes = {
-    1:'Boreal Forests/Taiga', 2:'Deserts & Xeric Shrublands',
-    3:'Flooded Grasslands & Savannas', 4:'Mangroves',
-    5:'Mediterranean Forests, Woodlands & Scrub', 6:'Montane Grasslands & Shrublands',
-    7:'Rock and Ice', 8:'Temperate Broadleaf & Mixed Forests',
-    9:'Temperate Conifer Forests', 10:'Temperate Grasslands, Savannas & Shrublands',
-    11:'Tropical & Subtropical Coniferous Forests', 12:'Tropical & Subtropical Dry Broadleaf Forests',
-    13:'Tropical & Subtropical Grasslands, Savannas & Shrublands',
-    14:'Tropical & Subtropical Moist Broadleaf Forests', 15:'Tundra',
-}
+# Settings live in analog_config.py; aliased here so the body reads as before.
+out_dir = cfg.OUT_DIR
+clim_start, clim_end = cfg.CLIM_START, cfg.CLIM_END
+pc_var_min = cfg.PC_VAR_MIN          # drop PCs that explain too little variance
+min_biome_cells = cfg.MIN_BIOME_CELLS  # was 5000 here (500 elsewhere); now unified
+focal_chunk = 1000  # batch size for vector distance calc (smaller == less memory)
+sigma_cap = cfg.SIGMA_CAP
+BUFFER_KM = cfg.BUFFER_KM            # trivial-neighbor exclusion, shared with set selection
+VKEYS, K = cfg.VKEYS, cfg.K
+biomes = cfg.BIOMES
 dist_pctiles = [5, 10, 15, 20, 25, 50, 75, 90, 95]
 
 # ==============================
 # Load ERA5 ICV + biome mask
 # ==============================
-print(f"Variables: {VKEYS} (K={K})")
 print("Loading biome mask and ERA5 annual timeseries...")
-biome_ds = xr.open_dataset(biome_file).sortby('lat')
-bmin = float(biome_ds.lat.min()); bmax = float(biome_ds.lat.max())
-biome_grid = biome_ds['BIOME_ID'].values
-
-clim_mean, icv_sd, icv_series = {}, {}, {}
-lat_arr = lon_arr = None
-T = None
-for vk in VKEYS:
-    cfg = VARIABLES[vk]
-    ds = xr.open_dataset(cfg['era5_ts']).sortby('lat').sel(lat=slice(bmin, bmax))
-    ts = ds[cfg['era5_var']].sel(time=slice(str(clim_start), str(clim_end)))
-    if lat_arr is None:
-        lat_arr = ts.lat.values; lon_arr = ts.lon.values
-        nlat, nlon = len(lat_arr), len(lon_arr)
-        T = ts.sizes['time']
-        print(f"  Grid: {nlat} x {nlon}, ICV years: {T}")
-    arr = ts.values.astype(np.float64)
-    arr[arr > cfg['qc_max']] = np.nan
-    if cfg['log']:
-        arr = np.log1p(arr)
-    # Detrended ERA5 ICV: per-cell linear trend removed before taking the SD,
-    # so the 1991-2020 forced signal is not counted as interannual variability.
-    # clim_mean is unchanged by detrending (intercept == period mean).
-    clim_mean[vk], icv_sd[vk], icv_series[vk] = detrend_icv(arr)
-    ds.close()
-
-# Per-cell ICV correlation matrix entries (off-diagonals only).
-# Per-cell ICV cross-variable correlation, computed from the DETRENDED anomaly
-# series with a pairwise-finite year count (ddof=2), consistent with icv_sd.
-# Using undetrended anomalies here would credit a shared forced trend as shared
-# interannual variability, inflating the off-diagonal and rotating the PC axes.
-icv_corr = build_icv_corr(VKEYS, icv_sd, icv_series)
+biome_grid, bmin, bmax = load_biomes()
+clim_mean, icv_sd, icv_series, icv_corr, lat_arr, lon_arr = load_era5_icv(bmin, bmax)
+nlat, nlon = len(lat_arr), len(lon_arr)
 
 # ==============================
 # Output arrays
@@ -147,33 +83,6 @@ m_dims_map = np.full((nlat, nlon), np.nan, np.float32)
 biome_dist_summary = {}
 
 
-def haversine_km(lat1, lon1, lat2, lon2):
-    """Great-circle distance (km). Inputs in degrees, broadcastable."""
-    R = 6371.0
-    p1 = np.radians(lat1); p2 = np.radians(lat2)
-    dphi = np.radians(lat2 - lat1)
-    dlmb = np.radians(lon2 - lon1)
-    a = np.sin(dphi/2)**2 + np.cos(p1)*np.cos(p2)*np.sin(dlmb/2)**2
-    return 2*R*np.arcsin(np.sqrt(np.clip(a, 0, 1)))
-
-
-def sigma_from_distance(d, m):
-    """Mahony sigma dissimilarity, HALF-NORMAL convention: 0 = identical,
-    grows monotonically positive with distance.
-
-    p = chi.cdf(D, df=m) is the probability an ICV draw falls WITHIN distance
-    D; the sigma level is the two-sided normal quantile enclosing that same
-    probability, i.e. norm.ppf(0.5 + p/2). Never negative.
-
-    NOTE: a previous version used norm.ppf(p) clipped at 0, which returns
-    EXACTLY 0 for every analog with D < 1.177 (df=2), silently zeroing the
-    entire map. Do not reintroduce that."""
-    p = np.clip(chi.cdf(d, df=m), 0.0, 1.0 - 1e-15)
-    return np.clip(norm.ppf(0.5 + p/2), 0.0, sigma_cap)
-
-
-# Slow loop through each biome 
-# ---------------------------- 
 for b, bname in biomes.items():
     t0 = time.time()
     bmask = (biome_grid == b)
@@ -312,9 +221,9 @@ ds_out.attrs['variables'] = ', '.join(VKEYS)
 ds_out.attrs['icv_period'] = f'{clim_start}-{clim_end}'
 ds_out.attrs['buffer_km'] = BUFFER_KM
 ds_out.attrs['sigma_convention'] = ('half-normal: sigma = norm.ppf(0.5 + chi.cdf(D,df=m)/2); 0 = identical, monotone increasing, never negative.')
-ds_out.attrs['icv_definition'] = ('ERA5 1991-2020 annual index series, per grid cell, LINEARLY DETRENDED before taking the SD (ddof=2). Fixed observational ruler: the same ICV is applied to historical and to every CMIP6 model/GWL; ICV is never recomputed per model. Cross-variable ICV correlations are computed from the same detrended anomalies. Focal-cell convention (Mahony 2017): D_ji is scored in focal cell j ICV PC space and is asymmetric.')
+ds_out.attrs['icv_definition'] = cfg.ICV_DEFINITION
 ds_out.attrs['note'] = 'Historical only. No Dt threshold (deferred to stability step).'
-outfile = os.path.join(out_dir, 'analog_historical_sigma.nc')
+outfile = cfg.HIST_SIGMA_FILE
 ds_out.to_netcdf(outfile)
 print(f'Saved: {outfile}')
 

@@ -39,6 +39,8 @@ from scipy.stats import chi, norm
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from icv_utils import detrend_icv, icv_correlation
 
 # Font/plot settings

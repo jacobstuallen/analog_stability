@@ -1,0 +1,39 @@
+# Synthetic test data for the analog pipeline (small grid, 3 models).
+# Usage: python tests/make_synth.py <out_root>
+import numpy as np, xarray as xr, os, sys
+root = sys.argv[1]
+rng = np.random.default_rng(1)
+lat = np.arange(-20, 20, 0.5) + 0.25    # 80
+lon = np.arange(0, 80, 0.5) + 0.25      # 160
+LA, LO = np.meshgrid(lat, lon, indexing='ij')
+biome = np.where(LO < 40, 1.0, 14.0)
+biome[(LA > 15) & (LO > 70)] = 4.0       # small biome (~ 200 cells)
+os.makedirs(f'{root}/biomes', exist_ok=True)
+xr.Dataset({'BIOME_ID': (['lat', 'lon'], biome)}, coords={'lat': lat, 'lon': lon}).to_netcdf(f'{root}/biomes/biomes.analog.gridded.nc')
+os.makedirs(f'{root}/CCKP/ERA5', exist_ok=True)
+yrs = np.arange(1950, 2025)
+t = xr.date_range('1950-01-01', periods=len(yrs), freq='YS')
+txx_m = 30 + 10*np.cos(np.radians(LA*3)) + 0.05*LO
+rx_m = 50 + 40*np.sin(np.radians(LO*4))**2 + LA
+def ser(mean, sd, trend):
+    n = len(yrs)
+    return mean[None] + trend*(yrs-1990)[:, None, None] + sd*rng.standard_normal((n,)+mean.shape)
+txx = ser(txx_m, 1.0, 0.03)
+rx = np.clip(ser(rx_m, 8.0, 0.1), 1, None)
+rx[:, 0, 0] = np.nan  # a NaN cell
+for tok, arr in [('txx', txx), ('rx5day', rx)]:
+    xr.Dataset({f'timeseries-{tok}-annual-mean': (['time', 'lat', 'lon'], arr)},
+               coords={'time': t, 'lat': lat, 'lon': lon}).to_netcdf(
+        f'{root}/CCKP/ERA5/timeseries-{tok}-annual-mean_era5-x0.25_era5-x0.25-historical_timeseries_mean_1950-2024.nc')
+fy = np.arange(2015, 2101); tf = xr.date_range('2015-01-01', periods=len(fy), freq='YS')
+for mi, (model, ens) in enumerate([('access-cm2', 'r1i1p1f1'), ('canesm5', 'r1i1p1f1'), ('miroc6', 'r1i1p1f1')]):
+    bias_t = rng.normal(0, 1, txx_m.shape) + mi
+    bias_r = rng.normal(0, 5, rx_m.shape)
+    for tok, m, sd, tr, b in [('txx', txx_m, 1.0, 0.04 + 0.0005*LA, bias_t), ('rx5day', rx_m, 8.0, 0.2, bias_r)]:
+        arr = m[None] + b[None] + tr*(fy-1990)[:, None, None] + sd*rng.standard_normal((len(fy),)+m.shape)
+        if tok == 'rx5day': arr = np.clip(arr, 1, None)
+        d = f'{root}/CCKP/CMIP6/{tok}/{model}-{ens}-ssp585'; os.makedirs(d, exist_ok=True)
+        xr.Dataset({f'timeseries-{tok}-annual-mean': (['time', 'lat', 'lon'], arr)},
+                   coords={'time': tf, 'lat': lat, 'lon': lon}).to_netcdf(
+            f'{d}/timeseries-{tok}-annual-mean_cmip6-x0.25_{model}-{ens}-ssp585_timeseries_mean_2015-2100.nc')
+print('ok')

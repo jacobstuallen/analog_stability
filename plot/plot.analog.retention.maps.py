@@ -26,14 +26,17 @@ import cartopy.feature as cfeature
 import colormaps as cmaps
 HAVE_CARTOPY = True
 
-data_root = '/glade/campaign/ral/risc/jsallen/TNC'
-out_dir = f'{data_root}/analog_stability'
-ret_file = os.path.join(out_dir, 'analog_retention.nc')
-sets_file = os.path.join(out_dir, 'analog_sets.nc')
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import analog_config as cfg
+
+out_dir = cfg.OUT_DIR
+ret_file = cfg.RETENTION_FILE
+sets_file = cfg.SETS_FILE
 
 MASK_LOW_COVERAGE = True
-N_FULL = 10           # full analog set size
-S_FULL = 500.0        # full spacing (cells below this were relaxed)
+N_FULL = cfg.N_ANALOGS   # full analog set size
+S_FULL = cfg.S_TRY[0]    # full spacing (cells below this were relaxed)
 DT_STRICT, DT_LOOSE = 1.0, 2.0
 
 print(f"Loading {ret_file} ...")

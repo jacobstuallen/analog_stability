@@ -31,229 +31,48 @@ import numpy as np
 import xarray as xr
 import os
 import time
-from scipy.stats import chi, norm
-from icv_utils import detrend_icv, build_icv_corr
+
+import analog_config as cfg
+from analog_common import (load_biomes, load_era5_icv, load_future_gwl,
+                           grid_index_lookup, sigma_from_distance)
 
 # ==============================
-# Configuration
+# Configuration (edit in analog_config.py; aliased here)
 # ==============================
-data_root = '/glade/campaign/ral/risc/jsallen/TNC'
-cckp_root = f'{data_root}/CCKP/CMIP6'
-biome_file = '/glade/u/home/jsallen/projects/tnc_2025/analogs/biomes/biomes.analog.gridded.nc'
-hist_analog_file = f'{data_root}/analog_stability/analog_historical_sigma.nc'
-out_dir = f'{data_root}/analog_stability'
-
-clim_start, clim_end = 1991, 2020
-pc_var_min = 0.01
-min_biome_cells = 500
+hist_analog_file = cfg.HIST_SIGMA_FILE
+out_dir = cfg.OUT_DIR
+pc_var_min = cfg.PC_VAR_MIN
+min_biome_cells = cfg.MIN_BIOME_CELLS
 focal_chunk = 1000
-sigma_cap = 8.0
-scenario = 'ssp585'
-
-# ---- Variable configuration ----
-# Each entry: key used internally -> dict with ERA5 annual timeseries file,
-# ERA5 timeseries varname, CCKP index token (folder/filename), and whether
-# to log1p-transform. Extend this list to go to 4 variables.
-VARIABLES = {
-    'txx': {
-        'era5_ts':  f'{data_root}/CCKP/ERA5/timeseries-txx-annual-mean_era5-x0.25_era5-x0.25-historical_timeseries_mean_1950-2024.nc',
-        'era5_var': 'timeseries-txx-annual-mean',
-        'cckp_token': 'txx',
-        'log': False,
-        'qc_max': 70.0,
-    },
-    'rx5day': {
-        'era5_ts':  f'{data_root}/CCKP/ERA5/timeseries-rx5day-annual-mean_era5-x0.25_era5-x0.25-historical_timeseries_mean_1950-2024.nc',
-        'era5_var': 'timeseries-rx5day-annual-mean',
-        'cckp_token': 'rx5day',
-        'log': True,
-        'qc_max': 3000.0,
-    },
-    # To extend to 4 variables, add e.g.:
-    # 'wbt': {... era5 annual wbt ts ..., 'cckp_token':'wbt', 'log':False, 'qc_max':45.0},
-    # 'cdd': {... era5 annual cdd ts ..., 'cckp_token':'cdd', 'log':False, 'qc_max':400.0},
-}
-VKEYS = list(VARIABLES.keys())
-K = len(VKEYS)
-
-# ---- CMIP6 ensemble members (model -> ensemble variant) ----
-models = {
-    'access-cm2':'r1i1p1f1', 'access-esm1-5':'r1i1p1f1', 'bcc-csm2-mr':'r1i1p1f1',
-    'canesm5':'r1i1p1f1', 'cmcc-esm2':'r1i1p1f1', 'cnrm-cm6-1':'r1i1p1f2',
-    'cnrm-esm2-1':'r1i1p1f2', 'ec-earth3':'r1i1p1f1', 'ec-earth3-veg-lr':'r1i1p1f1',
-    'fgoals-g3':'r3i1p1f1', 'gfdl-cm4':'r1i1p1f1', 'gfdl-esm4':'r1i1p1f1',
-    'giss-e2-1-g':'r1i1p1f2', 'hadgem3-gc31-ll':'r1i1p1f3', 'hadgem3-gc31-mm':'r1i1p1f3',
-    'inm-cm4-8':'r1i1p1f1', 'inm-cm5-0':'r1i1p1f1', 'ipsl-cm6a-lr':'r1i1p1f1',
-    'kace-1-0-g':'r1i1p1f1', 'kiost-esm':'r1i1p1f1', 'miroc-es2l':'r1i1p1f2',
-    'miroc6':'r1i1p1f1', 'mpi-esm1-2-hr':'r1i1p1f1', 'mpi-esm1-2-lr':'r1i1p1f1',
-    'mri-esm2-0':'r1i1p1f1', 'nesm3':'r1i1p1f1', 'noresm2-lm':'r1i1p1f1',
-    'noresm2-mm':'r1i1p1f1', 'taiesm1':'r1i1p1f1', 'ukesm1-0-ll':'r1i1p1f2',
-}
-
-# ---- GWL windows, SSP5-8.5, ensemble-mean periods (Tye 2025 Appendix B) ----
-# model -> (gwl2_start, gwl2_end, gwl3_start, gwl3_end)
-# Models with no published SSP5-8.5 window (fgoals-g3, noresm2-mm) are
-# absent here and will be skipped with a logged warning.
-GWL = {
-    'access-cm2':(2024,2043,2043,2062), 'access-esm1-5':(2027,2046,2048,2067),
-    'bcc-csm2-mr':(2030,2049,2052,2071), 'canesm5':(2019,2038,2036,2055),
-    'cmcc-esm2':(2033,2052,2049,2068), 'cnrm-cm6-1':(2029,2048,2048,2067),
-    'cnrm-esm2-1':(2029,2048,2048,2067), 'ec-earth3':(2025,2044,2046,2065),
-    'ec-earth3-veg-lr':(2029,2048,2047,2066), 'gfdl-cm4':(2030,2049,2048,2067),
-    'gfdl-esm4':(2038,2057,2061,2080), 'giss-e2-1-g':(2028,2047,2052,2071),
-    'hadgem3-gc31-ll':(2020,2039,2039,2058), 'hadgem3-gc31-mm':(2023,2042,2037,2056),
-    'inm-cm4-8':(2037,2056,2060,2079), 'inm-cm5-0':(2035,2054,2063,2082),
-    'ipsl-cm6a-lr':(2027,2046,2045,2064), 'kace-1-0-g':(2020,2039,2041,2060),
-    'kiost-esm':(2037,2056,2062,2081), 'miroc-es2l':(2033,2052,2056,2075),
-    'miroc6':(2037,2056,2061,2080), 'mpi-esm1-2-hr':(2039,2058,2064,2083),
-    'mpi-esm1-2-lr':(2040,2059,2063,2082), 'mri-esm2-0':(2029,2048,2053,2072),
-    'nesm3':(2026,2045,2046,2065), 'noresm2-lm':(2041,2060,2063,2082),
-    'taiesm1':(2021,2040,2037,2056), 'ukesm1-0-ll':(2019,2038,2034,2053),
-}
-
-biomes = {
-    1:'Boreal Forests/Taiga', 2:'Deserts & Xeric Shrublands',
-    3:'Flooded Grasslands & Savannas', 4:'Mangroves',
-    5:'Mediterranean Forests, Woodlands & Scrub', 6:'Montane Grasslands & Shrublands',
-    7:'Rock and Ice', 8:'Temperate Broadleaf & Mixed Forests',
-    9:'Temperate Conifer Forests', 10:'Temperate Grasslands, Savannas & Shrublands',
-    11:'Tropical & Subtropical Coniferous Forests', 12:'Tropical & Subtropical Dry Broadleaf Forests',
-    13:'Tropical & Subtropical Grasslands, Savannas & Shrublands',
-    14:'Tropical & Subtropical Moist Broadleaf Forests', 15:'Tundra',
-}
-
-GWLS = ['gwl2', 'gwl3']
-
-# ==============================
-# Helpers
-# ==============================
-def cckp_ts_path(token, model, ensemble, scen):
-    """CCKP CMIP6 future ANNUAL TIMESERIES file for a model+scenario.
-    GWL windows require annual timeseries (we average over the window),
-    not the pre-computed fixed-period climatologies."""
-    folder = f'{model}-{ensemble}-{scen}'
-    fname = (f'timeseries-{token}-annual-mean_cmip6-x0.25_'
-             f'{model}-{ensemble}-{scen}_timeseries_mean_2015-2100.nc')
-    return os.path.join(cckp_root, token, folder, fname)
-
-
-def load_ts_window(filepath, varname, ys, ye, lat_min, lat_max):
-    """Load a CCKP annual timeseries, return the (lat,lon) mean over
-    [ys,ye] inclusive."""
-    ds = xr.open_dataset(filepath).sortby('lat').sel(lat=slice(lat_min, lat_max))
-    da = ds[varname] if varname in ds else ds[
-        [v for v in ds.data_vars if 'bnds' not in v and ds[v].ndim >= 2][0]]
-    w = da.sel(time=slice(str(ys), str(ye))).mean(dim='time').values
-    ds.close()
-    if w.ndim == 3:
-        w = w.squeeze()
-    return w
-
-
-def sigma_from_distance(d, m):
-    p = np.clip(chi.cdf(d, df=m), 0.0, 1.0 - 1e-15)
-    # HALF-NORMAL convention (matches set_selection / retention /
-    # historical). norm.ppf(p) would emit NEGATIVE sigma for D < 1.177
-    # (df=2), which is meaningless for a dissimilarity and corrupts
-    # any mean/median taken over it.
-    return np.clip(norm.ppf(0.5 + p/2), 0.0, sigma_cap)
-
+sigma_cap = cfg.SIGMA_CAP
+scenario = cfg.SCENARIO
+VKEYS, K = cfg.VKEYS, cfg.K
+biomes = cfg.BIOMES
+GWLS = cfg.GWLS
 
 # ==============================
 # Load ERA5 ICV per variable + historical climatology + biome + analogs
 # ==============================
-print(f"Variables: {VKEYS} (K={K})")
 print("Loading biome mask and historical analog assignments...")
-biome_ds = xr.open_dataset(biome_file).sortby('lat')
-bmin = float(biome_ds.lat.min()); bmax = float(biome_ds.lat.max())
-biome_grid = biome_ds['BIOME_ID'].values
+biome_grid, bmin, bmax = load_biomes()
 
 hist_ds = xr.open_dataset(hist_analog_file).sortby('lat')
 analog_lat_grid = hist_ds['analog_lat'].values
 analog_lon_grid = hist_ds['analog_lon'].values
 
-print("Loading ERA5 ICV for each variable...")
-clim_mean = {}   # variable -> (nlat,nlon) 1991-2020 climatological mean
-icv_sd    = {}   # variable -> (nlat,nlon) ICV std
-icv_series = {}  # variable -> (T,nlat,nlon) anomaly series (for covariance)
-lat_arr = lon_arr = None
-for vk in VKEYS:
-    cfg = VARIABLES[vk]
-    ds = xr.open_dataset(cfg['era5_ts']).sortby('lat').sel(lat=slice(bmin, bmax))
-    ts = ds[cfg['era5_var']].sel(time=slice(str(clim_start), str(clim_end)))
-    if lat_arr is None:
-        lat_arr = ts.lat.values; lon_arr = ts.lon.values
-        nlat, nlon = len(lat_arr), len(lon_arr)
-        T = ts.sizes['time']
-    arr = ts.values.astype(np.float64)
-    arr[arr > cfg['qc_max']] = np.nan
-    if cfg['log']:
-        arr = np.log1p(arr)
-    # Detrended ERA5 ICV: per-cell linear trend removed before taking the SD,
-    # so the 1991-2020 forced signal is not counted as interannual variability.
-    # clim_mean is unchanged by detrending (intercept == period mean).
-    clim_mean[vk], icv_sd[vk], icv_series[vk] = detrend_icv(arr)
-    ds.close()
-
-# Per-cell ICV correlation matrix entries (K x K). For K=2 just one off-diag.
-# Store as dict of (vi,vj) -> (nlat,nlon) correlation.
-# Per-cell ICV cross-variable correlation, computed from the DETRENDED anomaly
-# series with a pairwise-finite year count (ddof=2), consistent with icv_sd.
-# Using undetrended anomalies here would credit a shared forced trend as shared
-# interannual variability, inflating the off-diagonal and rotating the PC axes.
-icv_corr = build_icv_corr(VKEYS, icv_sd, icv_series)
+clim_mean, icv_sd, icv_series, icv_corr, lat_arr, lon_arr = load_era5_icv(bmin, bmax)
+nlat, nlon = len(lat_arr), len(lon_arr)
 
 # ==============================
-# Load CMIP6 future GWL climatologies per model -> ensemble mean per GWL
+# Load CMIP6 future GWL climatologies per model
 # ==============================
-print("\nLoading CMIP6 future GWL climatologies...")
-# future_mean[gwl][vk] accumulates list of per-model (nlat,nlon) arrays
-future_stack = {g: {vk: [] for vk in VKEYS} for g in GWLS}
-models_used = []
-for model, ens in models.items():
-    if model not in GWL:
-        print(f'  {model}: no SSP5-8.5 GWL window, skipping')
-        continue
-    g2s, g2e, g3s, g3e = GWL[model]
-    wins = {'gwl2': (g2s, g2e), 'gwl3': (g3s, g3e)}
-    # check files exist for all variables
-    paths = {vk: cckp_ts_path(VARIABLES[vk]['cckp_token'], model, ens, scenario)
-             for vk in VKEYS}
-    missing = [vk for vk, p in paths.items() if not os.path.exists(p)]
-    if missing:
-        print(f'  {model}: missing {missing}, skipping')
-        continue
-    print(f'  {model} (GWL2 {g2s}-{g2e}, GWL3 {g3s}-{g3e})...', end=' ', flush=True)
-    ok = True
-    tmp = {g: {} for g in GWLS}
-    for vk in VKEYS:
-        cfg = VARIABLES[vk]
-        for g in GWLS:
-            ys, ye = wins[g]
-            w = load_ts_window(paths[vk], f'timeseries-{cfg["cckp_token"]}-annual-mean',
-                               ys, ye, bmin, bmax)
-            w[w > cfg['qc_max']] = np.nan
-            if cfg['log']:
-                w = np.log1p(w)
-            tmp[g][vk] = w
-    for g in GWLS:
-        for vk in VKEYS:
-            future_stack[g][vk].append(tmp[g][vk])
-    models_used.append(model)
-    print('OK')
-
+future_ens, models_used = load_future_gwl(bmin, bmax, GWLS)   # (n_models, nlat, nlon)
 n_models = len(models_used)
-print(f'  Loaded {n_models} models')
-
-# Ensemble: per GWL, per variable -> (n_models, nlat, nlon)
-future_ens = {g: {vk: np.stack(future_stack[g][vk], axis=0) for vk in VKEYS}
-              for g in GWLS}
 
 # ==============================
 # Build a fast lookup from (lat,lon) value -> grid index for analog cells
 # ==============================
-lat_to_i = {round(float(v), 4): i for i, v in enumerate(lat_arr)}
-lon_to_j = {round(float(v), 4): j for j, v in enumerate(lon_arr)}
+lat_to_i, lon_to_j = grid_index_lookup(lat_arr, lon_arr)
 
 # ==============================
 # Output arrays
@@ -408,7 +227,7 @@ ds_out.attrs['variables'] = ', '.join(VKEYS)
 ds_out.attrs['n_models'] = n_models
 ds_out.attrs['models'] = ', '.join(models_used)
 ds_out.attrs['scenario'] = scenario
-ds_out.attrs['icv_definition'] = ('ERA5 1991-2020 annual index series, per grid cell, LINEARLY DETRENDED before taking the SD (ddof=2). Fixed observational ruler: the same ICV is applied to historical and to every CMIP6 model/GWL; ICV is never recomputed per model. Cross-variable ICV correlations are computed from the same detrended anomalies. Focal-cell convention (Mahony 2017): D_ji is scored in focal cell j ICV PC space and is asymmetric.')
+ds_out.attrs['icv_definition'] = cfg.ICV_DEFINITION
 ds_out.attrs['sigma_saturation'] = (
     'sigma = norm.ppf(0.5 + chi.cdf(D,df=m)/2) saturates at sigma_cap=%s. Above '
     'D_maha ~6 the map is uninformative: distinct separations collapse to the same '
@@ -416,7 +235,7 @@ ds_out.attrs['sigma_saturation'] = (
     'the fraction of ensemble members pinned at the cap per cell.' % sigma_cap)
 ds_out.attrs['note'] = ('Continuous sigma trajectory only (diagnostic 1). '
     'Retained/shifted/novel classification deferred pending Dt.')
-outfile = os.path.join(out_dir, 'analog_stability_gwl.nc')
+outfile = cfg.STABILITY_FILE
 ds_out.to_netcdf(outfile)
 print(f'\nSaved: {outfile}')
 
@@ -426,8 +245,8 @@ save_kv = {'models': np.array(models_used)}
 for b, gd in per_model_biome.items():
     for g, arr in gd.items():
         save_kv[f'biome_{b}_{g}'] = arr.astype(np.float32)
-np.savez(os.path.join(out_dir, 'per_model_biome_sigma.npz'), **save_kv)
-print(f"Saved: {os.path.join(out_dir, 'per_model_biome_sigma.npz')}")
+np.savez(cfg.STABILITY_NPZ, **save_kv)
+print(f'Saved: {cfg.STABILITY_NPZ}')
 
 # ==============================
 # Per-biome summary

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.o[0-9]*
+*.nc
+ecoregion/shp/
+*.zip

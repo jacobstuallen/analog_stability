@@ -85,8 +85,8 @@ nlat, nlon = len(lat_arr), len(lon_arr)
 # ==============================
 # Load CMIP6 future GWL climatologies per model
 # ==============================
-future_ens, models_used = load_future_gwl(bmin, bmax, GWLS, clim_mean=clim_mean)   # (n_models, nlat, nlon)
-n_models = len(models_used)
+# future_ens[g][vk]: (n_models_g, nlat, nlon); models_used[g]: model names
+future_ens, models_used = load_future_gwl(bmin, bmax, GWLS, clim_mean=clim_mean)
 
 # lookup analog lat/lon value -> grid index
 lat_to_i, lon_to_j = grid_index_lookup(lat_arr, lon_arr)
@@ -152,6 +152,7 @@ for b, bname in biomes.items():
         delta_f = fut_f - mu[None]                                                     # (M,n,K)
 
         # accumulators across models
+        n_models = len(models_used[g])
         ret_curve_m = np.full((n_models, n, nDt), np.nan, np.float32)
         magr_m = np.full((n_models, n), np.nan, np.float32)
         dirc_m = np.full((n_models, n), np.nan, np.float32)
@@ -226,14 +227,17 @@ ds_out.attrs['method'] = (
     'historical-ICV ruler: per focal cell, fraction of its diverse top-N '
     'within-biome analogs (analog_sets.nc) whose FUTURE climatology stays '
     'within Dt sigma of the focal cell FUTURE climatology, swept over Dt. '
-    'Per-model (SSP5-8.5, Tye 2025 GWL windows) then ensemble median/p10/p90. '
+    'Per-model (SSP5-8.5 GWL windows, see gwl_source) then ensemble median/p10/p90. '
     'Attribution: magratio (|delta_a|/|delta_f|) and dircong (cos angle of '
     'delta_a vs delta_f) in focal-std space, mean over the analog set.')
 ds_out.attrs['icv_definition'] = cfg.ICV_DEFINITION
 ds_out.attrs['variables'] = ', '.join(VKEYS)
-ds_out.attrs['n_models'] = n_models
-ds_out.attrs['models'] = ', '.join(models_used)
 ds_out.attrs['scenario'] = scenario
+ds_out.attrs['gwl_source'] = cfg.GWL_SOURCE
+ds_out.attrs['model_set'] = cfg.MODEL_SET
+for g in GWLS:
+    ds_out.attrs[f'models_{g}'] = ', '.join(models_used[g])
+    ds_out.attrs[f'n_models_{g}'] = len(models_used[g])
 ds_out.attrs['future_mode'] = cfg.FUTURE_MODE
 ds_out.attrs['future_definition'] = (
     'delta: ERA5 1991-2020 mean + (model GWL window - model 1991-2020 mean; '
@@ -250,8 +254,9 @@ print('\n--- Per-biome ensemble-median retention ---')
 hdr = f'{"biome":<46}'
 for g in GWLS:
     for Dt in DT_SLICES:
-        hdr += f' {g[-1]}@{Dt:>3}'
-hdr += f' {"dir2":>6} {"dir3":>6}'
+        hdr += f' {g[3:]:>3}@{Dt:<3}'
+for g in GWLS:
+    hdr += f' {"dir" + g[3:]:>6}'
 print(hdr)
 for b, bname in biomes.items():
     bm = (biome_grid == b) & (N_FOUND > 0)
@@ -261,9 +266,9 @@ for b, bname in biomes.items():
     for g in GWLS:
         for Dt in DT_SLICES:
             di = int(np.argmin(np.abs(DT_GRID - Dt)))
-            row += f' {np.nanmean(out[f"retention_{g}"][bm, di]):>5.2f}'
-    d2 = np.nanmean(out['dircong_gwl2'][bm]); d3 = np.nanmean(out['dircong_gwl3'][bm])
-    row += f' {d2:>6.2f} {d3:>6.2f}'
+            row += f' {np.nanmean(out[f"retention_{g}"][bm, di]):>7.2f}'
+    for g in GWLS:
+        row += f' {np.nanmean(out[f"dircong_{g}"][bm]):>6.2f}'
     print(row)
 
 print('\nDone.')

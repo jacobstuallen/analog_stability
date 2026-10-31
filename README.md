@@ -25,8 +25,16 @@ Paths can be overridden with `ANALOG_DATA_ROOT`, `ANALOG_OUT_DIR`,
 `FUTURE_MODE` (env `ANALOG_FUTURE_MODE`) is `delta` by default: ERA5
 1991-2020 + (model GWL window - model 1991-2020 window, historical + SSP
 years). `raw` uses model output as-is and is kept only for comparison.
-`ANALOG_GWLS` picks warming levels (default `gwl2,gwl3`; `gwl0` is the
-baseline sanity check).
+`ANALOG_GWLS` picks warming levels (default `gwl1p5,gwl2,gwl3,gwl4`;
+`gwl0` is the baseline sanity check).
+
+## Warming levels
+Windows come from the IPCC AR6 Atlas per-member table (Hauser et al.,
+zenodo 3591806), stored in `data/gwl_windows_ar6_ssp585.csv` and rebuilt
+with `tools/make_gwl_table.py`. 30 models reach GWL1.5-3; 18 reach GWL4.
+`ANALOG_GWL_SOURCE=tye` restores the Tye et al. 2025 GWL2/3 windows used in
+the first draft. `ANALOG_MODEL_SET=common` restricts every GWL to models
+that reach all requested GWLs (outputs get a `_common` suffix).
 
 ## Regression check
     python tests/make_synth.py /tmp/synth

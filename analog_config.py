@@ -27,9 +27,7 @@ ECO_FILE = os.environ.get(
 HIST_SIGMA_FILE = os.path.join(OUT_DIR, 'analog_historical_sigma.nc')
 HIST_DIST_FILE = os.path.join(OUT_DIR, 'analog_historical_dist_summary.npz')
 SETS_FILE = os.path.join(OUT_DIR, 'analog_sets.nc')
-RETENTION_FILE = os.path.join(OUT_DIR, 'analog_retention.nc')
-STABILITY_FILE = os.path.join(OUT_DIR, 'analog_stability_gwl.nc')
-STABILITY_NPZ = os.path.join(OUT_DIR, 'per_model_biome_sigma.npz')
+# RETENTION_FILE, STABILITY_FILE, STABILITY_NPZ: set below (depend on MODEL_SET)
 
 # ==============================
 # Method constants
@@ -106,12 +104,23 @@ MODELS = {
 }
 
 # ==============================
-# GWL windows, SSP5-8.5 (Tye et al. 2025, Appendix B), 20-yr, inclusive.
-# GWL_WINDOWS[gwl][model] = (start, end). Models absent from a GWL are
-# skipped for that GWL (fgoals-g3 and noresm2-mm have no published window).
-# To add GWL1.5 / GWL4, add a key here and list it in GWLS.
+# GWL windows (20-yr, inclusive, relative to 1850-1900), SSP5-8.5.
+# GWL_WINDOWS[gwl][model] = (start, end). A model is used at a GWL only if it
+# has a window there, so ensembles can differ by GWL (GWL4: 18 of 30 models).
+#
+# GWL_SOURCE (env ANALOG_GWL_SOURCE):
+#   'ar6' (default): IPCC AR6 Atlas per-member windows (Hauser et al.,
+#         zenodo 3591806), for the exact member CCKP downscaled. One method
+#         for all levels. Table in data/gwl_windows_ar6_ssp585.csv.
+#   'tye': Tye et al. 2025 Appendix B (ensemble-mean periods), GWL2/3 only.
+#         The windows behind the draft results; kept for comparison.
 # ==============================
-_GWL23 = {
+GWL_KEYS = {'gwl1p5': 1.5, 'gwl2': 2.0, 'gwl3': 3.0, 'gwl4': 4.0}   # name -> deg C
+GWL_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'data', 'gwl_windows_ar6_ssp585.csv')
+GWL_SOURCE = os.environ.get('ANALOG_GWL_SOURCE', 'ar6')
+
+_TYE_GWL23 = {
     'access-cm2': (2024, 2043, 2043, 2062), 'access-esm1-5': (2027, 2046, 2048, 2067),
     'bcc-csm2-mr': (2030, 2049, 2052, 2071), 'canesm5': (2019, 2038, 2036, 2055),
     'cmcc-esm2': (2033, 2052, 2049, 2068), 'cnrm-cm6-1': (2029, 2048, 2048, 2067),
@@ -127,14 +136,48 @@ _GWL23 = {
     'nesm3': (2026, 2045, 2046, 2065), 'noresm2-lm': (2041, 2060, 2063, 2082),
     'taiesm1': (2021, 2040, 2037, 2056), 'ukesm1-0-ll': (2019, 2038, 2034, 2053),
 }
-GWL_WINDOWS = {
-    'gwl2': {m: (w[0], w[1]) for m, w in _GWL23.items()},
-    'gwl3': {m: (w[2], w[3]) for m, w in _GWL23.items()},
-}
+
+
+def _load_ar6_windows(path):
+    import csv
+    by_level = {}
+    with open(path) as f:
+        rows = [l for l in f if not l.startswith('#')]
+    for r in csv.DictReader(rows):
+        if MODELS.get(r['model']) != r['ensemble']:
+            continue
+        by_level.setdefault(float(r['warming_level']), {})[r['model']] = (
+            int(r['start_year']), int(r['end_year']))
+    return {k: by_level.get(v, {}) for k, v in GWL_KEYS.items()}
+
+
+if GWL_SOURCE == 'ar6':
+    GWL_WINDOWS = _load_ar6_windows(GWL_TABLE)
+elif GWL_SOURCE == 'tye':
+    GWL_WINDOWS = {'gwl2': {m: (w[0], w[1]) for m, w in _TYE_GWL23.items()},
+                   'gwl3': {m: (w[2], w[3]) for m, w in _TYE_GWL23.items()}}
+else:
+    raise ValueError(f'unknown ANALOG_GWL_SOURCE {GWL_SOURCE!r}')
+
 # 'gwl0' is the baseline window itself (sanity check: in delta mode it must
 # reproduce ERA5 exactly, so retention(Dt > 1) = 1). Not a real warming level.
-GWL_WINDOWS['gwl0'] = {m: (CLIM_START, CLIM_END) for m in _GWL23}
-GWLS = os.environ.get('ANALOG_GWLS', 'gwl2,gwl3').split(',')
+GWL_WINDOWS['gwl0'] = {m: (CLIM_START, CLIM_END) for m in MODELS}
+
+_default_gwls = 'gwl1p5,gwl2,gwl3,gwl4' if GWL_SOURCE == 'ar6' else 'gwl2,gwl3'
+GWLS = os.environ.get('ANALOG_GWLS', _default_gwls).split(',')
+
+# MODEL_SET (env ANALOG_MODEL_SET):
+#   'per_gwl' (default): each GWL uses every model that reaches it.
+#   'common': every GWL uses only models that reach ALL requested GWLs, so
+#             levels are directly comparable (scaling test). Output files
+#             get a '_common' suffix so both can coexist.
+MODEL_SET = os.environ.get('ANALOG_MODEL_SET', 'per_gwl')
+if MODEL_SET not in ('per_gwl', 'common'):
+    raise ValueError(f'unknown ANALOG_MODEL_SET {MODEL_SET!r}')
+_SFX = '_common' if MODEL_SET == 'common' else ''
+RETENTION_FILE = os.path.join(OUT_DIR, f'analog_retention{_SFX}.nc')
+STABILITY_FILE = os.path.join(OUT_DIR, f'analog_stability_gwl{_SFX}.nc')
+STABILITY_NPZ = os.path.join(OUT_DIR, f'per_model_biome_sigma{_SFX}.npz')
 
 # ==============================
 # Biomes (WWF major habitat types; 98/99 lake/rock-ice codes not analyzed)

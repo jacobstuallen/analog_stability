@@ -186,10 +186,12 @@ def load_future_gwl(bmin, bmax, gwls=None, clim_mean=None, mode=None, verbose=Tr
     mode 'raw':
         future = model GWL window (model biases included).
 
-    A model is used only if it has a window for EVERY requested GWL and all
-    needed files, so all GWLs share one model list.
+    Ensembles can differ by GWL: a model enters a GWL if it has a window
+    there (cfg.MODEL_SET='per_gwl'), or only if it has windows for ALL
+    requested GWLs (cfg.MODEL_SET='common').
 
-    Returns future_ens[gwl][vk] -> (n_models, nlat, nlon), models_used."""
+    Returns future_ens[gwl][vk] -> (n_models_gwl, nlat, nlon) and
+    models_used[gwl] -> list of model names (same order as axis 0)."""
     gwls = gwls or cfg.GWLS
     mode = mode or cfg.FUTURE_MODE
     if mode not in ('delta', 'raw'):
@@ -197,18 +199,21 @@ def load_future_gwl(bmin, bmax, gwls=None, clim_mean=None, mode=None, verbose=Tr
     if mode == 'delta' and clim_mean is None:
         raise ValueError("mode='delta' needs clim_mean from load_era5_icv")
     if verbose:
-        print(f'\nLoading CMIP6 GWL climatologies (mode={mode})...')
+        print(f'\nLoading CMIP6 GWL climatologies (mode={mode}, '
+              f'windows={cfg.GWL_SOURCE}, models={cfg.MODEL_SET})...')
     stack = {g: {vk: [] for vk in cfg.VKEYS} for g in gwls}
-    models_used = []
+    models_used = {g: [] for g in gwls}
     for model, ens in cfg.MODELS.items():
-        no_win = [g for g in gwls if model not in cfg.GWL_WINDOWS[g]]
-        if no_win:
+        mg = [g for g in gwls if model in cfg.GWL_WINDOWS[g]]
+        if cfg.MODEL_SET == 'common' and len(mg) < len(gwls):
+            mg = []
+        if not mg:
             if verbose:
-                print(f'  {model}: no {scen_label()} window for {no_win}, skipping')
+                print(f'  {model}: no {scen_label()} window for the requested GWLs, skipping')
             continue
-        exps = [cfg.SCENARIO, 'historical'] if mode == 'delta' else [cfg.SCENARIO]
-        if mode == 'raw' and any(cfg.GWL_WINDOWS[g][model][0] <= cfg.MODEL_HIST_END for g in gwls):
-            exps.append('historical')
+        need_hist = mode == 'delta' or any(cfg.GWL_WINDOWS[g][model][0] <= cfg.MODEL_HIST_END
+                                           for g in mg)
+        exps = [cfg.SCENARIO] + (['historical'] if need_hist else [])
         missing = [(vk, e) for vk in cfg.VKEYS for e in exps
                    if not os.path.exists(cckp_ts_path(cfg.VARIABLES[vk]['cckp_token'], model, ens, e))]
         if missing:
@@ -217,24 +222,27 @@ def load_future_gwl(bmin, bmax, gwls=None, clim_mean=None, mode=None, verbose=Tr
             continue
         if verbose:
             wtxt = ', '.join(f'{g.upper()} {cfg.GWL_WINDOWS[g][model][0]}-'
-                             f'{cfg.GWL_WINDOWS[g][model][1]}' for g in gwls)
+                             f'{cfg.GWL_WINDOWS[g][model][1]}' for g in mg)
             print(f'  {model} ({wtxt})...', end=' ', flush=True)
         for vk in cfg.VKEYS:
             base = (model_window_mean(vk, model, ens, cfg.CLIM_START, cfg.CLIM_END, bmin, bmax)
                     if mode == 'delta' else None)
-            for g in gwls:
+            for g in mg:
                 ys, ye = cfg.GWL_WINDOWS[g][model]
                 w = model_window_mean(vk, model, ens, ys, ye, bmin, bmax)
                 if mode == 'delta':
                     w = clim_mean[vk] + (w - base)
                 stack[g][vk].append(w)
-        models_used.append(model)
+        for g in mg:
+            models_used[g].append(model)
         if verbose:
             print('OK')
     if verbose:
-        print(f'  Loaded {len(models_used)} models')
-    if not models_used:
-        raise RuntimeError('no CMIP6 models loaded; check paths and windows')
+        for g in gwls:
+            print(f'  {g}: {len(models_used[g])} models')
+    empty = [g for g in gwls if not models_used[g]]
+    if empty:
+        raise RuntimeError(f'no CMIP6 models loaded for {empty}; check paths and windows')
     future_ens = {g: {vk: np.stack(stack[g][vk], axis=0) for vk in cfg.VKEYS}
                   for g in gwls}
     return future_ens, models_used

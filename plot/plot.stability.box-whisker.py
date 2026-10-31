@@ -42,7 +42,7 @@ plt.rcParams['xtick.major.width'] = 0.6
 plt.rcParams['ytick.major.width'] = 0.6
 
 f = np.load(infile, allow_pickle=True)
-models = f['models']
+models = f['models_gwl3'] if 'models_gwl3' in f.files else f['models']   # npz keys per GWL since step 2a
 n_models = len(models)
 
 def stats(arr):

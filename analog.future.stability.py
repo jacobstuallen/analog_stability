@@ -15,7 +15,7 @@
 #      as the historical script).
 #
 # Primary diagnostic produced here (per cell, per GWL):
-#   sigma_gwl2, sigma_gwl3 : sigma dissimilarity of the future cell to its
+#   sigma_<gwl> (each GWL in GWLS) : sigma dissimilarity of the future cell to its
 #                            historical best analog. The analog stability
 #                            trajectory (Methods 2.5 diagnostic 1).
 #   Plus ensemble 10th/90th percentile bounds across models.
@@ -67,8 +67,8 @@ nlat, nlon = len(lat_arr), len(lon_arr)
 # ==============================
 # Load CMIP6 future GWL climatologies per model
 # ==============================
-future_ens, models_used = load_future_gwl(bmin, bmax, GWLS, clim_mean=clim_mean)   # (n_models, nlat, nlon)
-n_models = len(models_used)
+# future_ens[g][vk]: (n_models_g, nlat, nlon); models_used[g]: model names
+future_ens, models_used = load_future_gwl(bmin, bmax, GWLS, clim_mean=clim_mean)
 
 # ==============================
 # Build a fast lookup from (lat,lon) value -> grid index for analog cells
@@ -162,6 +162,7 @@ for b, bname in biomes.items():
     # then rotates into focal PCs and whitens. Equivalent to standardizing
     # both by focal mu,sd and taking PC distance. We use the difference form.
     for g in GWLS:
+        n_models = len(models_used[g])
         sig_models = np.full((n_models, n), np.nan)
         dm_models  = np.full((n_models, n), np.nan)   # unsaturated D_maha
         for mi in range(n_models):
@@ -202,15 +203,11 @@ for b, bname in biomes.items():
         per_model_biome.setdefault(b, {})[g] = np.nanmedian(sig_models, axis=1)
         per_model_biome[b][f'{g}_dmaha'] = np.nanmedian(dm_models, axis=1)
 
-    em2 = np.nanmean(out['sigma_gwl2_mean'][vlat, vlon])
-    em3 = np.nanmean(out['sigma_gwl3_mean'][vlat, vlon])
-    dm2 = np.nanmean(out['dmaha_gwl2_mean'][vlat, vlon])
-    dm3 = np.nanmean(out['dmaha_gwl3_mean'][vlat, vlon])
-    cf2 = np.nanmean(out['capfrac_gwl2'][vlat, vlon])
-    cf3 = np.nanmean(out['capfrac_gwl3'][vlat, vlon])
-    print(f'  sigma : GWL2={em2:6.2f}  GWL3={em3:6.2f}   (cap={sigma_cap})')
-    print(f'  D_maha: GWL2={dm2:6.2f}  GWL3={dm3:6.2f}   (unsaturated)')
-    print(f'  frac at sigma cap: GWL2={cf2:5.1%}  GWL3={cf3:5.1%} | {time.time()-t0:.0f}s')
+    for lab, key, fmt in [('sigma ', 'sigma_{}_mean', '6.2f'), ('D_maha', 'dmaha_{}_mean', '6.2f'),
+                          ('at cap', 'capfrac_{}', '6.1%')]:
+        vals = '  '.join(f'{g.upper()}={np.nanmean(out[key.format(g)][vlat, vlon]):{fmt}}' for g in GWLS)
+        print(f'  {lab}: {vals}')
+    print(f'  {time.time()-t0:.0f}s')
 
 # ==============================
 # Save
@@ -221,13 +218,16 @@ for k, arr in out.items():
     ds_out[k] = (['lat', 'lon'], arr)
 ds_out['biome_id'] = (['lat', 'lon'], biome_grid.astype(np.float32))
 ds_out.attrs['method'] = ('Analog stability under GWLs (Methods 2.4-2.5). Future GWL '
-    'climatology (per-model 20yr window, Tye 2025 Appendix B, SSP5-8.5 ens-mean periods) '
+    'climatology (per-model 20yr window, SSP5-8.5, see gwl_source) '
     'standardized by historical 1991-2020 ERA5 ICV; sigma dissimilarity to historical '
     'best within-biome analog in focal-cell ICV PC space (Mahony 2017).')
 ds_out.attrs['variables'] = ', '.join(VKEYS)
-ds_out.attrs['n_models'] = n_models
-ds_out.attrs['models'] = ', '.join(models_used)
 ds_out.attrs['scenario'] = scenario
+ds_out.attrs['gwl_source'] = cfg.GWL_SOURCE
+ds_out.attrs['model_set'] = cfg.MODEL_SET
+for g in GWLS:
+    ds_out.attrs[f'models_{g}'] = ', '.join(models_used[g])
+    ds_out.attrs[f'n_models_{g}'] = len(models_used[g])
 ds_out.attrs['future_mode'] = cfg.FUTURE_MODE
 ds_out.attrs['future_definition'] = (
     'delta: ERA5 1991-2020 mean + (model GWL window - model 1991-2020 mean; '
@@ -246,8 +246,8 @@ ds_out.to_netcdf(outfile)
 print(f'\nSaved: {outfile}')
 
 # Sidecar: per-model biome-median sigma, for inter-model boxplots.
-# Keys: 'biome_{b}_{gwl}' -> array length n_models; plus 'models'.
-save_kv = {'models': np.array(models_used)}
+# Keys: 'biome_{b}_{gwl}' -> array length n_models_gwl; 'models_{gwl}' -> names.
+save_kv = {f'models_{g}': np.array(models_used[g]) for g in GWLS}
 for b, gd in per_model_biome.items():
     for g, arr in gd.items():
         save_kv[f'biome_{b}_{g}'] = arr.astype(np.float32)
@@ -258,11 +258,10 @@ print(f'Saved: {cfg.STABILITY_NPZ}')
 # Per-biome summary
 # ==============================
 print('\n--- Per-biome ensemble-mean sigma to historical analog ---')
-print(f'{"biome":<52} {"GWL2":>7} {"GWL3":>7}')
+print(f'{"biome":<52}' + ''.join(f' {g.upper():>7}' for g in GWLS))
 for b, bname in biomes.items():
     bm = (biome_grid == b)
-    s2 = out['sigma_gwl2_mean'][bm]; s3 = out['sigma_gwl3_mean'][bm]
-    s2 = s2[np.isfinite(s2)]; s3 = s3[np.isfinite(s3)]
-    if s2.size == 0: continue
-    print(f'{bname:<52} {np.median(s2):>7.2f} {np.median(s3):>7.2f}')
+    if not np.isfinite(out[f'sigma_{GWLS[0]}_mean'][bm]).any():
+        continue
+    print(f'{bname:<52}' + ''.join(f' {np.nanmedian(out[f"sigma_{g}_mean"][bm]):>7.2f}' for g in GWLS))
 print('\nDone.')

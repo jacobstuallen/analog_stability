@@ -53,6 +53,7 @@ import analog_config as cfg
 from analog_common import (load_biomes, load_era5_icv, load_future_gwl,
                            grid_index_lookup, dt_grid, pc_sigma, pc_whiten,
                            sigma_by_dims, mahal_var_shares, window_noise_cov,
+                           area_weights, wmean, wmedian,
                            focal_eig as _focal_eig)
 
 # ==============================
@@ -83,6 +84,7 @@ N_FOUND = sets_ds['n_analogs'].values
 
 clim_mean, icv_sd, icv_series, icv_corr, lat_arr, lon_arr = load_era5_icv(bmin, bmax)
 nlat, nlon = len(lat_arr), len(lon_arr)
+W = area_weights(lat_arr, nlon)      # cos(lat) weights for every biome statistic
 
 # ==============================
 # Load CMIP6 future GWL climatologies per model
@@ -96,10 +98,12 @@ future_ens, models_used = load_future_gwl(bmin, bmax, GWLS, clim_mean=clim_mean)
 # keeps the shared forced pattern and cuts interannual sampling noise by
 # ~sqrt(n_models); it also smooths model-to-model pattern differences, so
 # mmm divergence is a lower bound on any single model's.
-for g in GWLS:
-    for vk in VKEYS:
-        arr = future_ens[g][vk]
-        future_ens[g][vk] = np.concatenate([arr, np.nanmean(arr, axis=0)[None]], axis=0)
+with warnings.catch_warnings():                 # all-NaN cells -> NaN mean
+    warnings.simplefilter('ignore', RuntimeWarning)
+    for g in GWLS:
+        for vk in VKEYS:
+            arr = future_ens[g][vk]
+            future_ens[g][vk] = np.concatenate([arr, np.nanmean(arr, axis=0)[None]], axis=0)
 
 # Analytic noise floor of |divergence| if there were NO forced divergence:
 # white annual noise with ERA5 ICV at both cells, each model's actual window
@@ -167,6 +171,23 @@ def _dt_tag(Dt):
 
 AGREE = cfg.ROBUST_AGREE
 pair_out = {}
+# Share of the model spread in future pair distance that internal variability
+# alone would produce (Hawkins & Sutton-style split of the 'uncertain' tier):
+# fnoise = noise_var / var_across_models(|future_a - future_f|), capped at 1.
+# noise_var per whitened dim from window_noise_cov (two cells, each model's
+# window and the baseline), mean over models; scaled per pair by the squared
+# model/ERA5 ICV ratio if model_icv_ratio.nc exists.
+for g in GWLS:
+    out[f'fnoise_{g}'] = np.full((nlat, nlon), np.nan, np.float32)
+NOISE_VAR_DIST = {g: float(np.mean([2.0 * window_noise_cov([cfg.GWL_WINDOWS[g][m]],
+                                                           (cfg.CLIM_START, cfg.CLIM_END))[0, 0]
+                                    for m in models_used[g]])) for g in GWLS}
+ICV_R2 = None
+if os.path.exists(cfg.MODEL_ICV_FILE):
+    _r = xr.open_dataset(cfg.MODEL_ICV_FILE).sortby('lat')
+    ICV_R2 = np.nanmean(np.stack([_r[f'ratio_{vk}'].values**2 for vk in VKEYS]), axis=0)
+    ICV_R2 = np.where(np.isfinite(ICV_R2), ICV_R2, 1.0)
+    print(f'Noise fraction scaled by model/ERA5 ICV ratio^2 from {cfg.MODEL_ICV_FILE}')
 for g in GWLS:
     for Dt in DT_SLICES:
         t = _dt_tag(Dt)
@@ -245,6 +266,7 @@ for b, bname in biomes.items():
 
         # per-pair model counts for the agreement tiers (per-model members only)
         ret_cnt = np.zeros((len(DT_SLICES), n, N_SET))
+        fd_sum = np.zeros((n, N_SET)); fd_sq = np.zeros((n, N_SET)); fd_n = np.zeros((n, N_SET))
         fin_cnt = np.zeros((n, N_SET))
 
         for mi in range(nm1):
@@ -296,9 +318,15 @@ for b, bname in biomes.items():
                 below = (sig_a < Dt)
                 # count only over found analogs
                 cnt = np.nansum(np.where(np.isfinite(sig_a), below, 0), axis=1)
-                ret_curve_m[mi, :, di] = cnt / np.maximum(nfound, 1)
+                # denominator: pairs with a finite result (missing data is
+                # neither retained nor lost); no finite pair -> NaN
+                nfin = np.sum(np.isfinite(sig_a), axis=1)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    ret_curve_m[mi, :, di] = np.where(nfin > 0, cnt / np.maximum(nfin, 1), np.nan)
             msig_m[mi] = np.nanmean(sig_a, axis=1)
             if mi < n_models:
+                fdf = np.isfinite(fd_a)
+                fd_sum += np.where(fdf, fd_a, 0.0); fd_sq += np.where(fdf, fd_a**2, 0.0); fd_n += fdf
                 fin = np.isfinite(sig_a)
                 fin_cnt += fin
                 for si, Dt in enumerate(DT_SLICES):
@@ -320,6 +348,17 @@ for b, bname in biomes.items():
         out[f'retention_mmm_{g}'][vlat, vlon, :] = ret_curve_m[M_]
         # model agreement: pairs with no finite model result are excluded
         # (not counted as lost)
+        # noise fraction of the across-model spread in future pair distance
+        with np.errstate(invalid='ignore', divide='ignore'):
+            fd_var = (fd_sq - fd_sum**2 / np.maximum(fd_n, 1)) / np.maximum(fd_n - 1, 1)
+            nv = NOISE_VAR_DIST[g] * np.ones((n, N_SET))
+            if ICV_R2 is not None:
+                r2a = np.where(ali >= 0, ICV_R2[np.maximum(ali, 0), np.maximum(alj, 0)], np.nan)
+                nv = nv * 0.5 * (ICV_R2[vlat, vlon][:, None] + r2a)
+            fn = np.where(fd_n >= 3, np.minimum(nv / fd_var, 1.0), np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            out[f'fnoise_{g}'][vlat, vlon] = np.nanmedian(fn, axis=1)
         has_pair = fin_cnt > 0
         npair = has_pair.sum(axis=1)
         for si, Dt in enumerate(DT_SLICES):
@@ -353,8 +392,8 @@ for b, bname in biomes.items():
         slc = []
         for Dt in DT_SLICES:
             di = int(np.argmin(np.abs(DT_GRID - Dt)))
-            slc.append(f'Dt={Dt}:{np.nanmean(out[f"retention_{g}"][vlat,vlon,di]):.2f}')
-        med = {k: np.nanmedian(out[f'{k}_{g}'][vlat, vlon]) for k in ['departure', 'divergence', 'comove']}
+            slc.append(f'Dt={Dt}:{wmean(out[f"retention_{g}"][vlat,vlon,di], W[vlat, vlon]):.2f}')
+        med = {k: wmedian(out[f'{k}_{g}'][vlat, vlon], W[vlat, vlon]) for k in ['departure', 'divergence', 'comove']}
         print(f'  {g}: mean retention {" ".join(slc)} | departure {med["departure"]:.2f} '
               f'divergence {med["divergence"]:.2f} comove {med["comove"]:.2f}')
     print(f'  done | {time.time()-t0:.0f}s')
@@ -376,6 +415,12 @@ for k, arr in pair_out.items():
                             'description': 'percent of models in which this analog pair stays within Dt'})
 ds_out['biome_id'] = (['lat', 'lon'], biome_grid.astype(np.float32))
 ds_out['n_analogs'] = (['lat', 'lon'], N_FOUND.astype(np.float32))
+ds_out.attrs['fnoise_definition'] = (
+    'fnoise_<gwl>: median over analogs of min(1, noise_var / var across models of the '
+    'future pair distance); noise_var from white interannual noise (window_noise_cov, '
+    'mean over models), x model/ERA5 ICV ratio^2 if available. ~1: model spread is '
+    'internal variability; ~0: model disagreement.')
+ds_out.attrs['retention_denominator'] = 'pairs with a finite result (missing data excluded, not counted as lost)'
 ds_out.attrs['agreement_definition'] = (
     f'pairconf_<gwl>_<dt>: percent of models (per-model members, not the mean) in which '
     f'the pair is retained (sigma_fut < Dt); 255 = no analog. robret/uncert/roblost: '
@@ -429,9 +474,9 @@ ds_out.to_netcdf(outfile, encoding=enc)
 print(f'\nSaved: {outfile}')
 
 # ==============================
-# Per-biome summary at the Dt slices
+# Per-biome summary at the Dt slices (all biome statistics cos(lat) area-weighted)
 # ==============================
-print('\n--- Per-biome ensemble-median retention ---')
+print('\n--- Per-biome ensemble-median retention, area-weighted mean ---')
 hdr = f'{"biome":<46}'
 for g in GWLS:
     for Dt in DT_SLICES:
@@ -447,13 +492,13 @@ for b, bname in biomes.items():
     for g in GWLS:
         for Dt in DT_SLICES:
             di = int(np.argmin(np.abs(DT_GRID - Dt)))
-            row += f' {np.nanmean(out[f"retention_{g}"][bm, di]):>7.2f}'
+            row += f' {wmean(out[f"retention_{g}"][bm, di], W[bm]):>7.2f}'
     for g in GWLS:
-        row += f' {np.nanmedian(out[f"share_{VKEYS[0]}_div_{g}"][bm]):>8.2f}'
+        row += f' {wmedian(out[f"share_{VKEYS[0]}_div_{g}"][bm], W[bm]):>8.2f}'
     print(row)
 
 warnings.simplefilter('ignore', RuntimeWarning)   # comove is NaN at gwl0 (no change)
-print('\n--- Per-biome departure vs divergence (cell medians) ---')
+print('\n--- Per-biome departure vs divergence (area-weighted medians) ---')
 print(f'{"biome":<46}' + ''.join(f' {"dep" + g[3:]:>7} {"div" + g[3:]:>7} {"com" + g[3:]:>7}' for g in GWLS))
 for b, bname in biomes.items():
     bm = (biome_grid == b) & (N_FOUND > 0)
@@ -462,7 +507,7 @@ for b, bname in biomes.items():
     row = f'{bname:<46}'
     for g in GWLS:
         for k in ['departure', 'divergence', 'comove']:
-            row += f' {np.nanmedian(out[f"{k}_{g}"][bm]):>7.2f}'
+            row += f' {wmedian(out[f"{k}_{g}"][bm], W[bm]):>7.2f}'
     print(row)
 
 
@@ -476,13 +521,13 @@ for b, bname in biomes.items():
     bm = (biome_grid == b) & (N_FOUND > 0)
     if bm.sum() == 0 or not np.isfinite(out[f'divergence_{gl}'][bm]).any():
         continue
-    row = f'{bname:<46} {np.nanmedian(out[f"divergence_{gl}"][bm]):>7.2f} {np.nanmedian(out[f"divcommon_{gl}"][bm]):>7.2f}'
-    row += ''.join(f' {np.nanmedian(out[f"divabs_{vk}_{gl}"][bm]):>10.2f}' for vk in VKEYS)
-    row += ''.join(f' {np.nanmedian(out[f"share_{vk}_div_{gl}"][bm]):>9.2f}' for vk in VKEYS)
+    row = f'{bname:<46} {wmedian(out[f"divergence_{gl}"][bm], W[bm]):>7.2f} {wmedian(out[f"divcommon_{gl}"][bm], W[bm]):>7.2f}'
+    row += ''.join(f' {wmedian(out[f"divabs_{vk}_{gl}"][bm], W[bm]):>10.2f}' for vk in VKEYS)
+    row += ''.join(f' {wmedian(out[f"share_{vk}_div_{gl}"][bm], W[bm]):>9.2f}' for vk in VKEYS)
     print(row)
 print('  divabs units: ' + '; '.join(f'{vk}: {ABS_UNITS[vk]}' for vk in VKEYS))
 
-print('\n--- Noise floor: per-model vs multi-model-mean (forced) divergence, biome medians ---')
+print('\n--- Noise floor: per-model vs multi-model-mean (forced) divergence, area-weighted medians ---')
 print('    floor = median |divergence| from interannual noise alone')
 print(f'{"":<46}' + ''.join(f' {"div" + g[3:]:>8} {"mmm" + g[3:]:>8}' for g in GWLS))
 print(f'{"noise floor":<46}' + ''.join(f' {NOISE_FLOOR[g][0]:>8.2f} {NOISE_FLOOR[g][1]:>8.2f}' for g in GWLS))
@@ -490,22 +535,22 @@ for b, bname in biomes.items():
     bm = (biome_grid == b) & (N_FOUND > 0)
     if bm.sum() == 0 or not np.isfinite(out[f'divergence_{GWLS[-1]}'][bm]).any():
         continue
-    print(f'{bname:<46}' + ''.join(f' {np.nanmedian(out[f"divergence_{g}"][bm]):>8.2f}'
-                                   f' {np.nanmedian(out[f"divergence_mmm_{g}"][bm]):>8.2f}' for g in GWLS))
+    print(f'{bname:<46}' + ''.join(f' {wmedian(out[f"divergence_{g}"][bm], W[bm]):>8.2f}'
+                                   f' {wmedian(out[f"divergence_mmm_{g}"][bm], W[bm]):>8.2f}' for g in GWLS))
 di1 = int(np.argmin(np.abs(DT_GRID - 1.0)))
-print('\n--- Retention at Dt=1: per-model median vs multi-model mean, biome means ---')
+print('\n--- Retention at Dt=1: per-model median vs multi-model mean, area-weighted biome means ---')
 print(f'{"biome":<46}' + ''.join(f' {"ret" + g[3:]:>8} {"mmm" + g[3:]:>8}' for g in GWLS))
 for b, bname in biomes.items():
     bm = (biome_grid == b) & (N_FOUND > 0)
     if bm.sum() == 0 or not np.isfinite(out[f'retention_{GWLS[-1]}'][bm, di1]).any():
         continue
-    print(f'{bname:<46}' + ''.join(f' {np.nanmean(out[f"retention_{g}"][bm, di1]):>8.2f}'
-                                   f' {np.nanmean(out[f"retention_mmm_{g}"][bm, di1]):>8.2f}' for g in GWLS))
+    print(f'{bname:<46}' + ''.join(f' {wmean(out[f"retention_{g}"][bm, di1], W[bm]):>8.2f}'
+                                   f' {wmean(out[f"retention_mmm_{g}"][bm, di1], W[bm]):>8.2f}' for g in GWLS))
 
 for Dt in DT_SLICES:
     t = _dt_tag(Dt)
     print(f'\n--- Reliability tiers at Dt={Dt}: share of analogs robustly retained / uncertain / '
-          f'robustly lost (>= {AGREE:.0%} model agreement), biome means ---')
+          f'robustly lost (>= {AGREE:.0%} model agreement), area-weighted biome means ---')
     print(f'{"biome":<46}' + ''.join(f' {g[3:] + " ret/unc/lost":>18}' for g in GWLS))
     for b, bname in biomes.items():
         bm = (biome_grid == b) & (N_FOUND > 0)
@@ -513,8 +558,31 @@ for Dt in DT_SLICES:
             continue
         row = f'{bname:<46}'
         for g in GWLS:
-            row += '      {:.2f}/{:.2f}/{:.2f}'.format(*[np.nanmean(out[f'{k}_{g}_{t}'][bm])
+            row += '      {:.2f}/{:.2f}/{:.2f}'.format(*[wmean(out[f'{k}_{g}_{t}'][bm], W[bm])
                                                        for k in ['robret', 'uncert', 'roblost']])
         print(row)
+
+print('\n--- Noise fraction of model spread in future pair distance (area-weighted medians) ---')
+print('    1 = spread across models is what internal variability alone gives; 0 = model disagreement')
+print(f'{"biome":<46}' + ''.join(f' {"fn" + g[3:]:>7}' for g in GWLS if g != 'gwl0'))
+for b, bname in biomes.items():
+    bm = (biome_grid == b) & (N_FOUND > 0)
+    if bm.sum() == 0 or not any(np.isfinite(out[f'fnoise_{g}'][bm]).any() for g in GWLS):
+        continue
+    print(f'{bname:<46}' + ''.join(f' {wmedian(out[f"fnoise_{g}"][bm], W[bm]):>7.2f}' for g in GWLS if g != 'gwl0'))
+
+# Item Q: how close do the historical analogs sit to the sigma <= 1 gate?
+SET_SIG = sets_ds['analog_sigma'].values          # (nlat,nlon,N)
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore', RuntimeWarning)
+    cell_med = np.nanmedian(SET_SIG, axis=2)
+    cell_hi = np.nanmean(np.where(np.isfinite(SET_SIG), SET_SIG > 0.75, np.nan), axis=2)
+print('\n--- Historical analog quality (analog_sets.nc), area-weighted ---')
+print(f'{"biome":<46} {"med sigma_hist":>14} {"share > 0.75":>13}')
+for b, bname in biomes.items():
+    bm = (biome_grid == b) & (N_FOUND > 0)
+    if bm.sum() == 0:
+        continue
+    print(f'{bname:<46} {wmedian(cell_med[bm], W[bm]):>14.2f} {wmean(cell_hi[bm], W[bm]):>13.2f}')
 
 print('\nDone.')

@@ -20,6 +20,10 @@
 # Uses the same ERA5 inputs and ICV construction as analog_historical_sigma.py.
 # The biome file is used ONLY as a land mask (any valid BIOME_ID = land).
 
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import analog_config as cfg  # noqa: E402
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
@@ -43,7 +47,7 @@ clim_end   = 2020
 pc_var_min = 0.01
 log_rx5    = True 
 p_clip     = 1e-30     # tail clip in to_sigma (was 1e-15)
-sigma_cap  = 12.0      # hard ceiling; capped cells masked from panel (d)
+sigma_cap  = cfg.SIGMA_CAP   # same cap as the analysis (was 12 here; issue M)
 
 # Example focal cell: Edwards Plateau, TX.
 focal_lat   = 30.5

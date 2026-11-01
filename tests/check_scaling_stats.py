@@ -37,6 +37,21 @@ _, nlr_c, p_c, _, _ = linear_fit_nlr(curv, g, noise_var, kd)
 print(f'2 curved      : mean nlr {nlr_c.mean():.2f} (expect >> 1), p<0.05 {np.mean(p_c < 0.05):.3f}')
 assert nlr_c.mean() > 3
 
+# nonlinear fraction: ~0 for linear + noise, recovers the injected size for curved
+def nlfrac(V, cov):
+    r, _, _, _, _, rss, erss = linear_fit_nlr(V, g, cov, np.full(len(V), K), return_rss=True)
+    return np.sqrt(np.maximum(rss - erss, 0) / len(g)) / (r * (g.max() - g.min()))
+q = 0.15 * (g - 2.5)**2
+qres = q - np.polyval(np.polyfit(g, q, 1), g)                 # quadratic's departure from a line
+qslope = np.polyfit(g, q, 1)[0]                              # linear part the fit absorbs
+beta_fit = beta_true + qslope * np.sign(beta_true)
+true_nlf = np.sqrt(K * np.sum(qres**2) / len(g)) / (np.linalg.norm(beta_fit, axis=1) * (g.max() - g.min()))
+nf_lin = nlfrac(lin, noise_var); nf_cur = nlfrac(curv, noise_var)
+big = np.linalg.norm(beta_true, axis=1) > 0.5                  # well-determined slopes
+print(f'2b nl_frac     : linear median {np.median(nf_lin[big]):.3f} (expect ~0); curved median '
+      f'{np.median(nf_cur[big]):.3f} vs true {np.median(true_nlf[big]):.3f}')
+assert np.median(nf_lin[big]) < 0.02 and abs(np.median(nf_cur[big]) / np.median(true_nlf[big]) - 1) < 0.1
+
 # ---- 3: realistic overlapping windows ----
 keys = ['gwl1p5', 'gwl2', 'gwl3', 'gwl4']
 models = [m for m in cfg.MODELS if all(m in cfg.GWL_WINDOWS[k] for k in keys)]

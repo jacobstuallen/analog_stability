@@ -30,6 +30,10 @@
 # so -- fixed here.
 
 import os
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import analog_config as cfg  # noqa: E402
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
@@ -63,7 +67,7 @@ biome_file    = '/glade/u/home/jsallen/projects/tnc_2025/analogs/biomes/biomes.a
 clim_start = 1991
 clim_end   = 2020
 pc_var_min = 0.01  # get rid of noise
-sigma_cap  = 12.0   # matches main script (was 12.0 here -- reverted to match)
+sigma_cap  = cfg.SIGMA_CAP   # same cap as the analysis (was 12 here; issue M)
 
 # Per-variable config, mirrored from analog_historical_sigma.2var.py's
 # VARIABLES dict so the ICV built here is identical.

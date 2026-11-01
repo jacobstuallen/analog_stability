@@ -23,6 +23,10 @@
 # Single representative biome + cell, configurable below.
 # Uses the same ERA5 inputs and ICV construction as analog_historical_sigma.py.
 
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import analog_config as cfg  # noqa: E402
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
@@ -54,7 +58,7 @@ clim_start = 1991
 clim_end   = 2020
 pc_var_min = 0.01  # get rid of noise
 log_rx5    = False # toggle dis
-sigma_cap  = 12.0  # bumped this from 8 to 12! 
+sigma_cap  = cfg.SIGMA_CAP   # same cap as the analysis (was 12 here; issue M)
 
 # Example focal cell: Edwards Plateau, TX (Temperate Grasslands biome).
 focal_biome = 10   # grasssslands

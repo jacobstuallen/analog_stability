@@ -21,6 +21,9 @@
 #              noise is scaled by the models' squared ICV ratio.
 #   frac_nonlin : fraction of a cell's analog pairs with p < 0.05
 #                 (0.05 expected if every pair scales linearly)
+#   nl_frac  : SIZE of the nonlinearity: noise-corrected RMS residual per GWL,
+#              sqrt(max(RSS - E[RSS], 0) / L), over the linear change across
+#              the GWL range, |beta| * (gmax - gmin). 0 = linear.
 #   vnorm_<gwl> : median over analogs of |mean v(g)|, divergence at each GWL
 # Cell values are medians over the cell's analog set.
 #
@@ -99,7 +102,7 @@ del future_ens
 # Outputs
 # ==============================
 out = {k: np.full((nlat, nlon), np.nan, np.float32)
-       for k in ['div_rate', 'nlr', 'frac_nonlin', 'n_pairs']}
+       for k in ['div_rate', 'nlr', 'frac_nonlin', 'nl_frac', 'n_pairs']}
 for g in GWLS_SCALE:
     out[f'vnorm_{g}'] = np.full((nlat, nlon), np.nan, np.float32)
 biome_rows = {}
@@ -120,7 +123,7 @@ for b, bname in biomes.items():
         print(f'\nBiome {b:2d} ({bname}): {valid.sum()} valid, SKIPPING'); continue
     vlat_all, vlon_all = clat[valid], clon[valid]
     print(f'\nBiome {b:2d} ({bname}): {len(vlat_all)} valid cells')
-    pair_rate, pair_nlr, pair_p = [], [], []
+    pair_rate, pair_nlr, pair_p, pair_nlf = [], [], [], []
 
     for cs in range(0, len(vlat_all), FOCAL_CHUNK):
         vlat = vlat_all[cs:cs + FOCAL_CHUNK]; vlon = vlon_all[cs:cs + FOCAL_CHUNK]
@@ -159,6 +162,7 @@ for b, bname in biomes.items():
         full &= kd > 0
 
         rate = np.full(P, np.nan); nlr = np.full(P, np.nan); pv = np.full(P, np.nan)
+        nlf = np.full(P, np.nan)
         nscale = None
         if icv_ratio2 is not None:
             # mean over variables and the two cells of the squared ICV ratio
@@ -167,17 +171,23 @@ for b, bname in biomes.items():
             nscale = np.nanmean(np.concatenate([rf, ra], axis=0), axis=0)
             nscale = np.where(np.isfinite(nscale), nscale, 1.0)[full]
         if full.any():
-            r_, n_, p_, _, _ = linear_fit_nlr(vbar[full], G, noise_cov, kd[full], nscale)
+            r_, n_, p_, _, _, rss_, erss_ = linear_fit_nlr(vbar[full], G, noise_cov, kd[full],
+                                                           nscale, return_rss=True)
             rate[full], nlr[full], pv[full] = r_, n_, p_
+            with np.errstate(invalid='ignore', divide='ignore'):
+                nlf[full] = (np.sqrt(np.maximum(rss_ - erss_, 0.0) / len(G))
+                             / (r_ * (G.max() - G.min())))
         vnorm = np.where(full[:, None], np.linalg.norm(vbar, axis=2), np.nan)   # (P, L)
 
         rate = rate.reshape(n, N_SET); nlr = nlr.reshape(n, N_SET)
         pv = pv.reshape(n, N_SET); vnorm = vnorm.reshape(n, N_SET, len(G))
+        nlf = nlf.reshape(n, N_SET)
         npair = np.sum(np.isfinite(rate), axis=1)
         with warnings.catch_warnings():          # all-NaN rows -> NaN, quietly
             warnings.simplefilter('ignore', RuntimeWarning)
             out['div_rate'][vlat, vlon] = np.nanmedian(rate, axis=1)
             out['nlr'][vlat, vlon] = np.nanmedian(nlr, axis=1)
+            out['nl_frac'][vlat, vlon] = np.nanmedian(nlf, axis=1)
             fnl = np.nansum(pv < P_CRIT, axis=1) / np.maximum(npair, 1)
             out['frac_nonlin'][vlat, vlon] = np.where(npair > 0, fnl, np.nan)
             for li, g in enumerate(GWLS_SCALE):
@@ -185,10 +195,13 @@ for b, bname in biomes.items():
         out['n_pairs'][vlat, vlon] = npair
         fin = np.isfinite(rate)
         pair_rate.append(rate[fin]); pair_nlr.append(nlr[fin]); pair_p.append(pv[fin])
+        pair_nlf.append(nlf[fin])
 
     pr = np.concatenate(pair_rate); pn = np.concatenate(pair_nlr); pp = np.concatenate(pair_p)
+    pf = np.concatenate(pair_nlf)
     if pr.size:
-        biome_rows[b] = (np.median(pr), np.median(pn), np.mean(pp < P_CRIT), pr.size)
+        biome_rows[b] = (np.median(pr), np.median(pn), np.mean(pp < P_CRIT), pr.size,
+                         np.nanmedian(pf), np.nanpercentile(pf, 90))
         print(f'  pairs {pr.size}: median rate {np.median(pr):.3f}/degC, median nlr '
               f'{np.median(pn):.2f}, frac p<{P_CRIT} {np.mean(pp < P_CRIT):.3f} | {time.time()-t0:.0f}s')
 
@@ -231,7 +244,8 @@ print(f'\nSaved: {outfile}')
 print(f'\n--- Per-biome linear scaling ({M} common models) ---')
 print(f'    median nlr if perfectly linear (this noise model): {ds_out.attrs["nlr_null_median"]:.2f}; '
       f'p<0.05 fraction if linear: {P_CRIT}')
-print(f'{"biome":<52} {"rate/degC":>9} {"nlr":>6} {"p<.05":>6} {"pairs":>8}')
-for b, (r_, n_, f_, c_) in biome_rows.items():
-    print(f'{biomes[b]:<52} {r_:>9.3f} {n_:>6.2f} {f_:>6.3f} {c_:>8d}')
+print(f'{"biome":<52} {"rate/degC":>9} {"nlr":>6} {"p<.05":>6} {"nlfrac":>7} {"nl p90":>7} {"pairs":>8}')
+for b, (r_, n_, f_, c_, nf_, nf9_) in biome_rows.items():
+    print(f'{biomes[b]:<52} {r_:>9.3f} {n_:>6.2f} {f_:>6.3f} {nf_:>7.2f} {nf9_:>7.2f} {c_:>8d}')
+print('    nlfrac: noise-corrected nonlinear residual / linear change over GWL range (pair median, 90th pct)')
 print('\nDone.')

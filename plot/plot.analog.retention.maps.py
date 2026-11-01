@@ -30,6 +30,7 @@ HAVE_CARTOPY = True
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import analog_config as cfg
+from analog_common import area_weights, wmean
 
 out_dir = cfg.OUT_DIR
 ret_file = cfg.RETENTION_FILE
@@ -174,21 +175,30 @@ biomes = {
     12:'Trop Dry Broadleaf', 13:'Trop Grasslands', 14:'Trop Moist Broadleaf',
     15:'Tundra',
 }
-fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
+# Curves are cos(lat) AREA-WEIGHTED means over all cells with >= 1 analog
+# (issue I). Conditioning on full analog sets is optional (CURVES_FULL_SETS_ONLY)
+# because it drops exactly the cells with scarce analogs.
+CURVES_FULL_SETS_ONLY = False
+W = area_weights(lat, len(lon))
+gwls_plot = [g for g in cfg.GWLS if g != 'gwl0' and f'retention_{g}' in ds]
+fig, axes = plt.subplots(1, len(gwls_plot), figsize=(5 * len(gwls_plot), 5), sharey=True)
+axes = np.atleast_1d(axes)
 cmap = plt.get_cmap('tab20')
-for ax, g in zip(axes, ['gwl2', 'gwl3']):
+for ax, g in zip(axes, gwls_plot):
     ret = ds[f'retention_{g}'].values   # (nlat,nlon,nDt)
     for ci, (b, bn) in enumerate(biomes.items()):
-        bm = (biome_id == b) & keep
+        bm = (biome_id == b) & ((keep) if CURVES_FULL_SETS_ONLY else (n_analogs > 0))
         if bm.sum() < 50:
             continue
-        curve = np.nanmean(ret[bm], axis=0)   # mean over cells -> (nDt,)
+        curve = [wmean(ret[bm, di], W[bm]) for di in range(len(Dt))]
         ax.plot(Dt, curve, color=cmap(ci % 20), lw=1.4, label=bn)
     ax.set_title(f'{g.upper()}'); ax.set_xlabel('Dt (sigma threshold)')
     ax.set_ylim(0, 1); ax.grid(alpha=0.3)
-axes[0].set_ylabel('mean fraction retained')
-axes[1].legend(fontsize=7, ncol=1, loc='lower right')
-fig.suptitle('Retention vs threshold, per biome (well-covered cells only)', fontsize=12)
+axes[0].set_ylabel('area-weighted mean fraction retained')
+axes[-1].legend(fontsize=7, ncol=1, loc='lower right')
+fig.suptitle('Retention vs threshold, per biome (area-weighted; '
+             + ('full analog sets only' if CURVES_FULL_SETS_ONLY else 'all cells with analogs') + ')',
+             fontsize=12)
 fig.tight_layout()
 f3 = os.path.join(out_dir, 'retention_curves.png')
 fig.savefig(f3, dpi=400, bbox_inches='tight'); plt.close(fig)

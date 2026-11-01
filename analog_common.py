@@ -5,6 +5,7 @@
 # a focal cell's ICV PC space. Constants live in analog_config.py.
 
 import os
+import warnings
 import numpy as np
 import xarray as xr
 from scipy.stats import chi, norm
@@ -91,8 +92,10 @@ def pc_distance(diff, sd, evals, evecs):
     proj = np.einsum('nk,nkm->nm', dstd, evecs)
     keep = evals >= cfg.PC_VAR_MIN
     with np.errstate(invalid='ignore', divide='ignore'):
-        contrib = np.where(keep, proj**2 / evals, 0.0)
-    d = np.sqrt(np.nansum(contrib, axis=1))
+        contrib = np.where(keep, proj**2 / np.where(keep, evals, 1.0), 0.0)
+    # NaN in any variable -> NaN distance. (np.nansum used to drop it silently,
+    # scoring the pair on the remaining variable alone.)
+    d = np.sqrt(np.sum(contrib, axis=1))
     return d, keep.sum(axis=1)
 
 
@@ -117,7 +120,7 @@ def window_noise_cov(windows, base):
     return S
 
 
-def linear_fit_nlr(V, g, noise_cov, kdims, noise_scale=None):
+def linear_fit_nlr(V, g, noise_cov, kdims, noise_scale=None, return_rss=False):
     """Per-pair linear fit of divergence vectors against global warming level.
 
     V (n,L,K): divergence vectors at L warming levels (whitened units).
@@ -134,7 +137,8 @@ def linear_fit_nlr(V, g, noise_cov, kdims, noise_scale=None):
       rate (n,): |beta|, divergence per deg C
       nlr  (n,): RSS / E[RSS | linear + noise]; ~1 if linear (mean, not median)
       pval (n,): Satterthwaite scaled-chi-square p-value of RSS
-      alpha, beta (n,K)"""
+      alpha, beta (n,K)
+    With return_rss=True also returns rss (n,) and its noise expectation (n,)."""
     from scipy.stats import chi2
     g = np.asarray(g, float)
     L = len(g)
@@ -157,6 +161,8 @@ def linear_fit_nlr(V, g, noise_cov, kdims, noise_scale=None):
         nlr = rss / (ns * kd * trA)
         pval = chi2.sf(rss / scale, dof)
     rate = np.sqrt(np.sum(beta**2, axis=1))
+    if return_rss:
+        return rate, nlr, pval, alpha, beta, rss, ns * kd * trA
     return rate, nlr, pval, alpha, beta
 
 
@@ -264,7 +270,8 @@ def model_window_mean(vk, model, ens, ys, ye, lat_min, lat_max):
     arr[arr > v['qc_max']] = np.nan
     if v['log']:
         arr = np.log1p(arr)
-    with np.errstate(invalid='ignore'):
+    with warnings.catch_warnings():       # all-NaN cells (ocean edge, QC) -> NaN
+        warnings.simplefilter('ignore', RuntimeWarning)
         return np.nanmean(arr, axis=0)
 
 
@@ -362,6 +369,31 @@ def grid_indices(vals, axis_vals, tol=1e-3):
     tmp = np.where(hit, order[pick], -1)
     out[ok] = tmp
     return out
+
+
+def area_weights(lat_arr, nlon):
+    """cos(latitude) cell-area weights on the (lat, lon) grid."""
+    return np.broadcast_to(np.cos(np.deg2rad(lat_arr))[:, None],
+                           (len(lat_arr), nlon)).astype(np.float64)
+
+
+def wmean(x, w):
+    """Area-weighted mean over finite x. x, w same shape (or w broadcastable)."""
+    x = np.asarray(x, float); w = np.broadcast_to(w, x.shape)
+    ok = np.isfinite(x) & (w > 0)
+    return float(np.sum(x[ok] * w[ok]) / np.sum(w[ok])) if ok.any() else np.nan
+
+
+def wmedian(x, w):
+    """Area-weighted median over finite x."""
+    x = np.asarray(x, float); w = np.broadcast_to(w, x.shape)
+    ok = np.isfinite(x) & (w > 0)
+    if not ok.any():
+        return np.nan
+    xs, ws = x[ok], w[ok]
+    o = np.argsort(xs)
+    cw = np.cumsum(ws[o])
+    return float(xs[o][np.searchsorted(cw, 0.5 * cw[-1])])
 
 
 def grid_index_lookup(lat_arr, lon_arr):

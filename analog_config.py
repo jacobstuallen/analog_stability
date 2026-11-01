@@ -58,6 +58,10 @@ DECORR_KM = 400.0
 # Retention
 DT_GRID_START, DT_GRID_STOP, DT_GRID_STEP = 0.5, 4.0, 0.25
 DT_SLICES = [1.0, 2.0]
+# Model agreement (reliability tiers): a pair is ROBUSTLY RETAINED if at least
+# ROBUST_AGREE of models keep it within Dt, ROBUSTLY LOST if at most
+# 1 - ROBUST_AGREE do, otherwise UNCERTAIN (IPCC-style 80% agreement).
+ROBUST_AGREE = 0.8
 
 # ==============================
 # Variables

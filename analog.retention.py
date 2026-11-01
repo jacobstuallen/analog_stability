@@ -158,6 +158,22 @@ for g in GWLS:
     for k in MMM_KEYS:
         out[f'{k}_mmm_{g}'] = np.full((nlat, nlon), np.nan, np.float32)
 
+# Model agreement (step 5). Per pair: percent of models retaining it within
+# Dt (uint8, 255 = no analog / no data). Per cell: fractions of the analog set
+# that are robustly retained / uncertain / robustly lost.
+def _dt_tag(Dt):
+    return f'dt{Dt:.1f}'.replace('.', 'p')
+
+
+AGREE = cfg.ROBUST_AGREE
+pair_out = {}
+for g in GWLS:
+    for Dt in DT_SLICES:
+        t = _dt_tag(Dt)
+        pair_out[f'pairconf_{g}_{t}'] = np.full((nlat, nlon, N_SET), 255, np.uint8)
+        for k in ['robret', 'uncert', 'roblost']:
+            out[f'{k}_{g}_{t}'] = np.full((nlat, nlon), np.nan, np.float32)
+
 # Global ICV ruler: land median of each variable's ICV SD over analyzed biomes.
 _land = np.isin(biome_grid, list(biomes.keys()))
 COMMON_SD = np.array([np.nanmedian(icv_sd[vk][_land]) for vk in VKEYS])
@@ -227,6 +243,10 @@ for b, bname in biomes.items():
         divc_m = np.full((nm1, n), np.nan, np.float32)
         depc_m = np.full((nm1, n), np.nan, np.float32)
 
+        # per-pair model counts for the agreement tiers (per-model members only)
+        ret_cnt = np.zeros((len(DT_SLICES), n, N_SET))
+        fin_cnt = np.zeros((n, N_SET))
+
         for mi in range(nm1):
             # per-analog future sigma + attribution, then aggregate over analogs
             sig_a = np.full((n, N_SET), np.nan)     # future sigma per analog
@@ -278,6 +298,11 @@ for b, bname in biomes.items():
                 cnt = np.nansum(np.where(np.isfinite(sig_a), below, 0), axis=1)
                 ret_curve_m[mi, :, di] = cnt / np.maximum(nfound, 1)
             msig_m[mi] = np.nanmean(sig_a, axis=1)
+            if mi < n_models:
+                fin = np.isfinite(sig_a)
+                fin_cnt += fin
+                for si, Dt in enumerate(DT_SLICES):
+                    ret_cnt[si] += fin & (sig_a < Dt)
             with warnings.catch_warnings():      # cells with no finite analog -> NaN
                 warnings.simplefilter('ignore', RuntimeWarning)
                 div_m[mi] = np.nanmedian(div_a, axis=1)
@@ -293,6 +318,24 @@ for b, bname in biomes.items():
         out[f'retention_{g}_p90'][vlat, vlon, :] = np.nanpercentile(ret_curve_m[:M_], 90, axis=0)
         out[f'meansigma_{g}'][vlat, vlon] = np.nanmedian(msig_m[:M_], axis=0)
         out[f'retention_mmm_{g}'][vlat, vlon, :] = ret_curve_m[M_]
+        # model agreement: pairs with no finite model result are excluded
+        # (not counted as lost)
+        has_pair = fin_cnt > 0
+        npair = has_pair.sum(axis=1)
+        for si, Dt in enumerate(DT_SLICES):
+            t = _dt_tag(Dt)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                conf = np.where(has_pair, ret_cnt[si] / np.maximum(fin_cnt, 1), np.nan)
+            pc = np.full(conf.shape, 255, np.uint8)
+            pc[has_pair] = np.round(100 * conf[has_pair]).astype(np.uint8)
+            pair_out[f'pairconf_{g}_{t}'][vlat, vlon, :] = pc
+            rob_r = np.sum(has_pair & (conf >= AGREE - 1e-9), axis=1)
+            rob_l = np.sum(has_pair & (conf <= 1 - AGREE + 1e-9), axis=1)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                den = np.where(npair > 0, npair, np.nan)
+                out[f'robret_{g}_{t}'][vlat, vlon] = rob_r / den
+                out[f'roblost_{g}_{t}'][vlat, vlon] = rob_l / den
+                out[f'uncert_{g}_{t}'][vlat, vlon] = (npair - rob_r - rob_l) / den
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', RuntimeWarning)
             for k, arr in [('departure', dep_m), ('departure_sigma', deps_m),
@@ -326,8 +369,18 @@ for k, arr in out.items():
         ds_out[k] = (['lat', 'lon', 'Dt'], arr)
     else:
         ds_out[k] = (['lat', 'lon'], arr)
+ds_out = ds_out.assign_coords(rank=np.arange(N_SET))
+for k, arr in pair_out.items():
+    ds_out[k] = (['lat', 'lon', 'rank'], arr)
+    ds_out[k].attrs.update({'units': 'percent of models', 'missing': 255,
+                            'description': 'percent of models in which this analog pair stays within Dt'})
 ds_out['biome_id'] = (['lat', 'lon'], biome_grid.astype(np.float32))
 ds_out['n_analogs'] = (['lat', 'lon'], N_FOUND.astype(np.float32))
+ds_out.attrs['agreement_definition'] = (
+    f'pairconf_<gwl>_<dt>: percent of models (per-model members, not the mean) in which '
+    f'the pair is retained (sigma_fut < Dt); 255 = no analog. robret/uncert/roblost: '
+    f'fraction of a cell\'s analogs retained by >= {AGREE:.0%} of models / in between / '
+    f'retained by <= {1 - AGREE:.0%}; pairs without data excluded. Map agreement = 1 - uncert.')
 ds_out.attrs['method'] = (
     'Analog retention under GWLs. Future-state resemblance with fixed '
     'historical-ICV ruler: per focal cell, fraction of its diverse top-N '
@@ -371,7 +424,8 @@ ds_out.attrs['noise_floor_definition'] = (
     'Median |divergence| expected from white interannual noise alone (ERA5 ICV at '
     'both cells, actual GWL windows and 1991-2020 baseline): per model (median over '
     'models) and for the multi-model mean.')
-ds_out.to_netcdf(outfile)
+enc = {k: {'zlib': True, 'complevel': 4} for k in ds_out.data_vars}
+ds_out.to_netcdf(outfile, encoding=enc)
 print(f'\nSaved: {outfile}')
 
 # ==============================
@@ -447,5 +501,20 @@ for b, bname in biomes.items():
         continue
     print(f'{bname:<46}' + ''.join(f' {np.nanmean(out[f"retention_{g}"][bm, di1]):>8.2f}'
                                    f' {np.nanmean(out[f"retention_mmm_{g}"][bm, di1]):>8.2f}' for g in GWLS))
+
+for Dt in DT_SLICES:
+    t = _dt_tag(Dt)
+    print(f'\n--- Reliability tiers at Dt={Dt}: share of analogs robustly retained / uncertain / '
+          f'robustly lost (>= {AGREE:.0%} model agreement), biome means ---')
+    print(f'{"biome":<46}' + ''.join(f' {g[3:] + " ret/unc/lost":>18}' for g in GWLS))
+    for b, bname in biomes.items():
+        bm = (biome_grid == b) & (N_FOUND > 0)
+        if bm.sum() == 0 or not np.isfinite(out[f'robret_{GWLS[-1]}_{t}'][bm]).any():
+            continue
+        row = f'{bname:<46}'
+        for g in GWLS:
+            row += '      {:.2f}/{:.2f}/{:.2f}'.format(*[np.nanmean(out[f'{k}_{g}_{t}'][bm])
+                                                       for k in ['robret', 'uncert', 'roblost']])
+        print(row)
 
 print('\nDone.')

@@ -15,7 +15,9 @@ sigma dissimilarity) stay analogs under global warming levels?
      departure, pair divergence and co-movement -> `analog_retention.nc`.
      Per-model ensemble medians, plus `*_mmm_*` from the multi-model-mean
      future (forced response, sampling noise reduced); analytic noise floors
-     in the file attributes.
+     in the file attributes. Model agreement: `pairconf_*` (percent of models
+     retaining each analog pair) and per-cell reliability tiers
+     `robret_*` / `uncert_*` / `roblost_*` (80% agreement).
   4. `analog.scaling.py`: linear-scaling test of pair divergence with GWL
      (GWL1.5-4, common models, delta mode) -> `analog_scaling.nc`.
 - `legacy/`: retired single-best-analog stability pipeline (first draft).

@@ -229,7 +229,7 @@ for nsig in [1, 2, 3]:
     D_ring = chi.ppf(norm.cdf(nsig), df=m)
     axb.plot(D_ring*np.cos(theta), D_ring*np.sin(theta), color='k',
              lw=0.7, alpha=0.5, ls='--', zorder=3)
-    axb.text(D_ring*0.71, D_ring*0.71, f'{nsig}\u03c3', fontsize=7,
+    axb.text(D_ring*0.71, D_ring*0.71, f'{nsig}$\\sigma$', fontsize=7,
              alpha=0.7, ha='center', va='center')
 axb.scatter(0, 0, s=120, marker='*', c='k', zorder=5)
 axb.scatter(u1[best], u2[best], s=70, marker='D', facecolor='#d6604d',
@@ -267,7 +267,7 @@ axd.hist(pool, bins=np.linspace(0, sigma_cap, 81), color='#bdbdbd',
 for lev, col in zip(dt_levels, ['#d6604d', '#4393c3']):
     frac = 100 * np.mean(pool < lev)
     axd.axvline(lev, color=col, lw=1.2, ls='--',
-                label=f'D$_t$ = {lev:g}\u03c3 ({frac:.0f}% of biome cells)')
+                label=f'D$_t$ = {lev:g}$\\sigma$ ({frac:.0f}% of biome cells)')
 axd.set_xlabel(r' $\sigma$ dissimilarity to focal cell', fontsize=9)
 axd.set_ylabel('Cell count', fontsize=9)
 axd.set_title('d) Dissimilarity to focal cell across the biome', loc='left', fontsize=10)

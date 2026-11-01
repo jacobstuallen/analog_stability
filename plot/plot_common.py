@@ -20,7 +20,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import analog_config as cfg  # noqa: E402
 from analog_common import area_weights, wmean, wmedian  # noqa: E402,F401
 
-FIG_DIR = os.environ.get('ANALOG_FIG_DIR', os.path.join(cfg.OUT_DIR, 'figures'))
+# default: plot/figures in the repo (campaign storage is not writable from
+# every node); override with ANALOG_FIG_DIR
+FIG_DIR = os.environ.get('ANALOG_FIG_DIR',
+                         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figures'))
 HEADLINE = os.environ.get('ANALOG_HEADLINE', 'mmm')
 if HEADLINE not in ('mmm', 'median'):
     raise ValueError(f'unknown ANALOG_HEADLINE {HEADLINE!r}')

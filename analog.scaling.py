@@ -12,12 +12,13 @@
 # (the same models at every level: ANALOG_MODEL_SET is forced to 'common').
 #   div_rate : |beta|, pair divergence in whitened ICV units per deg C
 #              (Mahalanobis distance units, not sigma percentiles)
-#   nlr      : residual / analytic noise floor. ~1 if linear. Noise assumes
-#              each 20-yr model mean has ICV-sized white noise at both cells
-#              (variance 1/20 per whitened dim per cell; model ICV ~ ERA5 ICV
-#              after bias adjustment), divided by the number of models.
-#              Overlapping GWL windows correlate the noise and lower the
-#              residual, so the test is conservative.
+#   nlr      : residual / its expected value under linear + noise (~1 if
+#              linear; a MEAN-based ratio). The noise covariance across GWLs
+#              is exact for white annual noise given each model's actual GWL
+#              windows and the shared 1991-2020 baseline (window_noise_cov),
+#              in ERA5 ICV units at both cells, averaged over models. If
+#              model_icv_ratio.nc exists (diag.model.icv.py), each pair's
+#              noise is scaled by the models' squared ICV ratio.
 #   frac_nonlin : fraction of a cell's analog pairs with p < 0.05
 #                 (0.05 expected if every pair scales linearly)
 #   vnorm_<gwl> : median over analogs of |mean v(g)|, divergence at each GWL
@@ -34,7 +35,8 @@ import warnings
 
 import analog_config as cfg
 from analog_common import (load_biomes, load_era5_icv, load_future_gwl,
-                           grid_indices, focal_eig, pc_whiten, linear_fit_nlr)
+                           grid_indices, focal_eig, pc_whiten, linear_fit_nlr,
+                           window_noise_cov)
 
 # ==============================
 # Configuration
@@ -71,8 +73,22 @@ future_ens, models_used = load_future_gwl(bmin, bmax, GWLS_SCALE, clim_mean=clim
                                           model_set='common')
 models = models_used[GWLS_SCALE[0]]
 M = len(models)
-noise_var = 2.0 / WINDOW_YEARS / M
-print(f'  {M} common models; noise variance per whitened dim of the ensemble mean: {noise_var:.4f}')
+# Noise covariance across GWLs of one whitened dimension of the ensemble-mean
+# pair divergence (two cells, M independent models, actual window overlaps).
+noise_cov = sum(2.0 * window_noise_cov([cfg.GWL_WINDOWS[g][m] for g in GWLS_SCALE],
+                                       (cfg.CLIM_START, cfg.CLIM_END))
+                for m in models) / M**2
+print(f'  {M} common models; noise variance by GWL (ensemble mean, per whitened dim): '
+      + ', '.join(f'{x:.4f}' for x in np.diag(noise_cov)))
+
+# Optional: model/ERA5 ICV ratio (median over models) per cell and variable.
+icv_ratio2 = None
+if os.path.exists(cfg.MODEL_ICV_FILE):
+    _r = xr.open_dataset(cfg.MODEL_ICV_FILE).sortby('lat')
+    icv_ratio2 = np.stack([_r[f'ratio_{vk}'].values**2 for vk in VKEYS], axis=0)  # (K,nlat,nlon)
+    print(f'  scaling noise by model/ERA5 ICV ratio^2 from {cfg.MODEL_ICV_FILE}')
+else:
+    print('  no model ICV ratio file: noise assumes model ICV = ERA5 ICV')
 
 # per-model change fields (future - ERA5 clim), (M, nlat, nlon) per gwl, var
 change = {g: {vk: future_ens[g][vk] - clim_mean[vk][None] for vk in VKEYS}
@@ -143,8 +159,15 @@ for b, bname in biomes.items():
         full &= kd > 0
 
         rate = np.full(P, np.nan); nlr = np.full(P, np.nan); pv = np.full(P, np.nan)
+        nscale = None
+        if icv_ratio2 is not None:
+            # mean over variables and the two cells of the squared ICV ratio
+            # (approximation: ignores the rotation into PCs)
+            rf = icv_ratio2[:, fi, fj]; ra = icv_ratio2[:, aip, ajp]
+            nscale = np.nanmean(np.concatenate([rf, ra], axis=0), axis=0)
+            nscale = np.where(np.isfinite(nscale), nscale, 1.0)[full]
         if full.any():
-            r_, n_, p_, _, _ = linear_fit_nlr(vbar[full], G, noise_var, kd[full])
+            r_, n_, p_, _, _ = linear_fit_nlr(vbar[full], G, noise_cov, kd[full], nscale)
             rate[full], nlr[full], pv[full] = r_, n_, p_
         vnorm = np.where(full[:, None], np.linalg.norm(vbar, axis=2), np.nan)   # (P, L)
 
@@ -181,17 +204,21 @@ ds_out['div_rate'].attrs['units'] = 'whitened ICV units per deg C global warming
 ds_out.attrs['method'] = (
     'Per analog pair, divergence vector v(g) = change_a - change_f (delta mode), '
     'whitened in focal ICV PC space; multi-model mean fitted as alpha + beta*g over '
-    f'GWLs {", ".join(GWLS_SCALE)}. div_rate=|beta|; nlr=RSS/(noise_var*dof) with '
-    f'noise_var=2/{WINDOW_YEARS}/M; frac_nonlin = fraction of pairs with chi-square '
-    f'p<{P_CRIT}. Cell values: median over the analog set.')
+    f'GWLs {", ".join(GWLS_SCALE)}. div_rate=|beta|; nlr=RSS/E[RSS|linear+noise], noise '
+    f'covariance exact for white annual noise given each model window and the 1991-2020 '
+    f'baseline (ERA5 ICV units, two cells, M models); frac_nonlin = fraction of pairs with '
+    f'Satterthwaite p<{P_CRIT}. Cell values: median over the analog set.')
 ds_out.attrs['models'] = ', '.join(models)
 ds_out.attrs['n_models'] = M
-ds_out.attrs['noise_var'] = noise_var
-# Reference for the MEDIAN nlr under perfect linearity with independent noise:
-# median(chi2_dof)/dof, below 1 because chi-square is right-skewed. Window
-# overlap pushes the real null lower still.
+ds_out.attrs['noise_var_by_gwl'] = ', '.join(f'{x:.5f}' for x in np.diag(noise_cov))
+ds_out.attrs['icv_ratio_applied'] = int(icv_ratio2 is not None)
+# Reference for the MEDIAN nlr under perfect linearity (nlr is mean-normalized;
+# its median is below 1 because the scaled chi-square is right-skewed).
 from scipy.stats import chi2 as _chi2
-_dof = (len(G) - 2) * K
+_X = np.column_stack([np.ones(len(G)), G])
+_P = np.eye(len(G)) - _X @ np.linalg.solve(_X.T @ _X, _X.T)
+_A = _P @ noise_cov @ _P
+_dof = K * np.trace(_A)**2 / np.trace(_A @ _A)
 ds_out.attrs['nlr_null_median'] = float(_chi2.median(_dof) / _dof)
 ds_out.attrs['gwl_levels'] = ', '.join(f'{x}' for x in G)
 ds_out.attrs['gwl_source'] = cfg.GWL_SOURCE
@@ -202,7 +229,7 @@ ds_out.to_netcdf(outfile)
 print(f'\nSaved: {outfile}')
 
 print(f'\n--- Per-biome linear scaling ({M} common models) ---')
-print(f'    median nlr if perfectly linear (independent noise): {ds_out.attrs["nlr_null_median"]:.2f}; '
+print(f'    median nlr if perfectly linear (this noise model): {ds_out.attrs["nlr_null_median"]:.2f}; '
       f'p<0.05 fraction if linear: {P_CRIT}')
 print(f'{"biome":<52} {"rate/degC":>9} {"nlr":>6} {"p<.05":>6} {"pairs":>8}')
 for b, (r_, n_, f_, c_) in biome_rows.items():

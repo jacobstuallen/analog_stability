@@ -52,7 +52,7 @@ import warnings
 import analog_config as cfg
 from analog_common import (load_biomes, load_era5_icv, load_future_gwl,
                            grid_index_lookup, dt_grid, pc_sigma, pc_whiten,
-                           sigma_by_dims, mahal_var_shares,
+                           sigma_by_dims, mahal_var_shares, window_noise_cov,
                            focal_eig as _focal_eig)
 
 # ==============================
@@ -90,6 +90,31 @@ nlat, nlon = len(lat_arr), len(lon_arr)
 # future_ens[g][vk]: (n_models_g, nlat, nlon); models_used[g]: model names
 future_ens, models_used = load_future_gwl(bmin, bmax, GWLS, clim_mean=clim_mean)
 
+# Forced response (noise floor, plan step 8): append the multi-model-mean
+# future as one extra pseudo-member at index n_models. Per-model statistics
+# use members [0, n_models); *_mmm_* outputs come from the mean. The mean
+# keeps the shared forced pattern and cuts interannual sampling noise by
+# ~sqrt(n_models); it also smooths model-to-model pattern differences, so
+# mmm divergence is a lower bound on any single model's.
+for g in GWLS:
+    for vk in VKEYS:
+        arr = future_ens[g][vk]
+        future_ens[g][vk] = np.concatenate([arr, np.nanmean(arr, axis=0)[None]], axis=0)
+
+# Analytic noise floor of |divergence| if there were NO forced divergence:
+# white annual noise with ERA5 ICV at both cells, each model's actual window
+# and the 1991-2020 baseline (window_noise_cov). Median |v| = sqrt(var) *
+# sqrt(median chi2_K). Per model (median over models) and for the mean.
+from scipy.stats import chi2 as _chi2
+_chimed = np.sqrt(_chi2.median(K))
+NOISE_FLOOR = {}
+for g in GWLS:
+    _var = np.array([2.0 * window_noise_cov([cfg.GWL_WINDOWS[g][m]],
+                                            (cfg.CLIM_START, cfg.CLIM_END))[0, 0]
+                     for m in models_used[g]])
+    NOISE_FLOOR[g] = (float(np.sqrt(np.median(_var)) * _chimed),
+                      float(np.sqrt(_var.sum() / len(_var)**2) * _chimed))
+
 # lookup analog lat/lon value -> grid index
 lat_to_i, lon_to_j = grid_index_lookup(lat_arr, lon_arr)
 
@@ -123,6 +148,15 @@ for g in GWLS:
         out[f'divabs_{vk}_{g}'] = np.full((nlat, nlon), np.nan, np.float32)
     out[f'divcommon_{g}'] = np.full((nlat, nlon), np.nan, np.float32)
     out[f'depcommon_{g}'] = np.full((nlat, nlon), np.nan, np.float32)
+
+# Forced-response (multi-model-mean) versions of the main outputs
+MMM_KEYS = (['departure', 'departure_sigma', 'divergence', 'comove', 'futdist',
+             'divcommon', 'depcommon']
+            + [f'share_{vk}_div' for vk in VKEYS] + [f'divabs_{vk}' for vk in VKEYS])
+for g in GWLS:
+    out[f'retention_mmm_{g}'] = np.full((nlat, nlon, nDt), np.nan, np.float32)
+    for k in MMM_KEYS:
+        out[f'{k}_mmm_{g}'] = np.full((nlat, nlon), np.nan, np.float32)
 
 # Global ICV ruler: land median of each variable's ICV SD over analyzed biomes.
 _land = np.isin(biome_grid, list(biomes.keys()))
@@ -180,19 +214,20 @@ for b, bname in biomes.items():
 
         # accumulators across models
         n_models = len(models_used[g])
-        ret_curve_m = np.full((n_models, n, nDt), np.nan, np.float32)
-        msig_m = np.full((n_models, n), np.nan, np.float32)
-        dep_m = np.full((n_models, n), np.nan, np.float32)
-        deps_m = np.full((n_models, n), np.nan, np.float32)
-        div_m = np.full((n_models, n), np.nan, np.float32)
-        com_m = np.full((n_models, n), np.nan, np.float32)
-        fdist_m = np.full((n_models, n), np.nan, np.float32)
-        share_m = np.full((n_models, n, K), np.nan, np.float32)
-        dabs_m = np.full((n_models, n, K), np.nan, np.float32)
-        divc_m = np.full((n_models, n), np.nan, np.float32)
-        depc_m = np.full((n_models, n), np.nan, np.float32)
+        nm1 = n_models + 1                         # + multi-model mean at index n_models
+        ret_curve_m = np.full((nm1, n, nDt), np.nan, np.float32)
+        msig_m = np.full((nm1, n), np.nan, np.float32)
+        dep_m = np.full((nm1, n), np.nan, np.float32)
+        deps_m = np.full((nm1, n), np.nan, np.float32)
+        div_m = np.full((nm1, n), np.nan, np.float32)
+        com_m = np.full((nm1, n), np.nan, np.float32)
+        fdist_m = np.full((nm1, n), np.nan, np.float32)
+        share_m = np.full((nm1, n, K), np.nan, np.float32)
+        dabs_m = np.full((nm1, n, K), np.nan, np.float32)
+        divc_m = np.full((nm1, n), np.nan, np.float32)
+        depc_m = np.full((nm1, n), np.nan, np.float32)
 
-        for mi in range(n_models):
+        for mi in range(nm1):
             # per-analog future sigma + attribution, then aggregate over analogs
             sig_a = np.full((n, N_SET), np.nan)     # future sigma per analog
             # focal change whitened in its own ICV PC space -> local departure
@@ -252,19 +287,24 @@ for b, bname in biomes.items():
                 dabs_m[mi] = np.nanmedian(ab_a, axis=1)
                 divc_m[mi] = np.nanmedian(dc_a, axis=1)
 
-        out[f'retention_{g}'][vlat, vlon, :]     = np.nanmedian(ret_curve_m, axis=0)
-        out[f'retention_{g}_p10'][vlat, vlon, :] = np.nanpercentile(ret_curve_m, 10, axis=0)
-        out[f'retention_{g}_p90'][vlat, vlon, :] = np.nanpercentile(ret_curve_m, 90, axis=0)
-        out[f'meansigma_{g}'][vlat, vlon] = np.nanmedian(msig_m, axis=0)
+        M_ = n_models                               # per-model members: [:M_]; mean: [M_]
+        out[f'retention_{g}'][vlat, vlon, :]     = np.nanmedian(ret_curve_m[:M_], axis=0)
+        out[f'retention_{g}_p10'][vlat, vlon, :] = np.nanpercentile(ret_curve_m[:M_], 10, axis=0)
+        out[f'retention_{g}_p90'][vlat, vlon, :] = np.nanpercentile(ret_curve_m[:M_], 90, axis=0)
+        out[f'meansigma_{g}'][vlat, vlon] = np.nanmedian(msig_m[:M_], axis=0)
+        out[f'retention_mmm_{g}'][vlat, vlon, :] = ret_curve_m[M_]
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', RuntimeWarning)
             for k, arr in [('departure', dep_m), ('departure_sigma', deps_m),
                            ('divergence', div_m), ('comove', com_m), ('futdist', fdist_m),
                            ('divcommon', divc_m), ('depcommon', depc_m)]:
-                out[f'{k}_{g}'][vlat, vlon] = np.nanmedian(arr, axis=0)
+                out[f'{k}_{g}'][vlat, vlon] = np.nanmedian(arr[:M_], axis=0)
+                out[f'{k}_mmm_{g}'][vlat, vlon] = arr[M_]
             for kk, vk in enumerate(VKEYS):
-                out[f'share_{vk}_div_{g}'][vlat, vlon] = np.nanmedian(share_m[:, :, kk], axis=0)
-                out[f'divabs_{vk}_{g}'][vlat, vlon] = np.nanmedian(dabs_m[:, :, kk], axis=0)
+                out[f'share_{vk}_div_{g}'][vlat, vlon] = np.nanmedian(share_m[:M_, :, kk], axis=0)
+                out[f'divabs_{vk}_{g}'][vlat, vlon] = np.nanmedian(dabs_m[:M_, :, kk], axis=0)
+                out[f'share_{vk}_div_mmm_{g}'][vlat, vlon] = share_m[M_, :, kk]
+                out[f'divabs_{vk}_mmm_{g}'][vlat, vlon] = dabs_m[M_, :, kk]
 
         # quick read at the DT_SLICES
         slc = []
@@ -320,6 +360,17 @@ ds_out.attrs['future_definition'] = (
     'historical 1991-2014 + scenario 2015-2020), log1p space for log variables. '
     'raw: model GWL window as-is.')
 ds_out.attrs['dt_grid'] = ', '.join(f'{d}' for d in DT_GRID)
+ds_out.attrs['mmm_definition'] = (
+    '*_mmm_*: same metrics from the multi-model-mean future (forced response; '
+    'sampling noise reduced ~sqrt(n_models); model pattern differences averaged out, '
+    'so mmm divergence is a lower bound on single-model divergence).')
+for g in GWLS:
+    ds_out.attrs[f'noise_floor_div_{g}'] = NOISE_FLOOR[g][0]
+    ds_out.attrs[f'noise_floor_div_mmm_{g}'] = NOISE_FLOOR[g][1]
+ds_out.attrs['noise_floor_definition'] = (
+    'Median |divergence| expected from white interannual noise alone (ERA5 ICV at '
+    'both cells, actual GWL windows and 1991-2020 baseline): per model (median over '
+    'models) and for the multi-model mean.')
 ds_out.to_netcdf(outfile)
 print(f'\nSaved: {outfile}')
 
@@ -376,5 +427,25 @@ for b, bname in biomes.items():
     row += ''.join(f' {np.nanmedian(out[f"share_{vk}_div_{gl}"][bm]):>9.2f}' for vk in VKEYS)
     print(row)
 print('  divabs units: ' + '; '.join(f'{vk}: {ABS_UNITS[vk]}' for vk in VKEYS))
+
+print('\n--- Noise floor: per-model vs multi-model-mean (forced) divergence, biome medians ---')
+print('    floor = median |divergence| from interannual noise alone')
+print(f'{"":<46}' + ''.join(f' {"div" + g[3:]:>8} {"mmm" + g[3:]:>8}' for g in GWLS))
+print(f'{"noise floor":<46}' + ''.join(f' {NOISE_FLOOR[g][0]:>8.2f} {NOISE_FLOOR[g][1]:>8.2f}' for g in GWLS))
+for b, bname in biomes.items():
+    bm = (biome_grid == b) & (N_FOUND > 0)
+    if bm.sum() == 0 or not np.isfinite(out[f'divergence_{GWLS[-1]}'][bm]).any():
+        continue
+    print(f'{bname:<46}' + ''.join(f' {np.nanmedian(out[f"divergence_{g}"][bm]):>8.2f}'
+                                   f' {np.nanmedian(out[f"divergence_mmm_{g}"][bm]):>8.2f}' for g in GWLS))
+di1 = int(np.argmin(np.abs(DT_GRID - 1.0)))
+print('\n--- Retention at Dt=1: per-model median vs multi-model mean, biome means ---')
+print(f'{"biome":<46}' + ''.join(f' {"ret" + g[3:]:>8} {"mmm" + g[3:]:>8}' for g in GWLS))
+for b, bname in biomes.items():
+    bm = (biome_grid == b) & (N_FOUND > 0)
+    if bm.sum() == 0 or not np.isfinite(out[f'retention_{GWLS[-1]}'][bm, di1]).any():
+        continue
+    print(f'{bname:<46}' + ''.join(f' {np.nanmean(out[f"retention_{g}"][bm, di1]):>8.2f}'
+                                   f' {np.nanmean(out[f"retention_mmm_{g}"][bm, di1]):>8.2f}' for g in GWLS))
 
 print('\nDone.')

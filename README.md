@@ -13,10 +13,14 @@ sigma dissimilarity) stay analogs under global warming levels?
   2. `analog.set.selection.py`: diverse top-N analog sets -> `analog_sets.nc`.
   3. `analog.retention.py`: retention of each set under GWLs, plus local
      departure, pair divergence and co-movement -> `analog_retention.nc`.
+     Per-model ensemble medians, plus `*_mmm_*` from the multi-model-mean
+     future (forced response, sampling noise reduced); analytic noise floors
+     in the file attributes.
   4. `analog.scaling.py`: linear-scaling test of pair divergence with GWL
      (GWL1.5-4, common models, delta mode) -> `analog_scaling.nc`.
 - `legacy/`: retired single-best-analog stability pipeline (first draft).
-- `diag.*.py`: diagnostics. `plot/`: figures. `ecoregion/`: ecoregion gridding.
+- `diag.*.py`: diagnostics. `diag.model.icv.py` (model vs ERA5 ICV) feeds the
+  noise model of `analog.scaling.py`; run it before scaling. `plot/`: figures. `ecoregion/`: ecoregion gridding.
 - `tests/`: synthetic-data regression check (see below).
 
 ## Running on Casper

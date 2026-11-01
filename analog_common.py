@@ -96,35 +96,66 @@ def pc_distance(diff, sd, evals, evecs):
     return d, keep.sum(axis=1)
 
 
-def linear_fit_nlr(V, g, noise_var, kdims):
+def window_noise_cov(windows, base):
+    """Covariance of delta-mode changes at one cell from interannual noise,
+    in units of that cell's ICV variance (white noise assumed).
+
+    change_i = mean(window_i) - mean(base). With white annual noise,
+    cov(mean X, mean Y) = overlap(X, Y) / (len X * len Y), so
+    Cov(change_i, change_j) = c(W_i,W_j) - c(W_i,B) - c(W_j,B) + c(B,B).
+    windows: list of (start, end) inclusive; base: (start, end).
+    Returns (L, L)."""
+    def c(x, y):
+        ov = max(0, min(x[1], y[1]) - max(x[0], y[0]) + 1)
+        return ov / ((x[1] - x[0] + 1) * (y[1] - y[0] + 1))
+    L = len(windows)
+    S = np.empty((L, L))
+    for i in range(L):
+        for j in range(L):
+            S[i, j] = (c(windows[i], windows[j]) - c(windows[i], base)
+                       - c(windows[j], base) + c(base, base))
+    return S
+
+
+def linear_fit_nlr(V, g, noise_cov, kdims, noise_scale=None):
     """Per-pair linear fit of divergence vectors against global warming level.
 
     V (n,L,K): divergence vectors at L warming levels (whitened units).
-    g (L,): warming levels (deg C). noise_var: expected noise variance per
-    retained dimension of each V entry (e.g. 2/20/M for an M-model mean of
-    20-yr windows). kdims (n,): retained dimensions per pair.
+    g (L,): warming levels (deg C). noise_cov: noise covariance across the L
+    levels of each retained dimension of V, either an (L,L) matrix (e.g. pair
+    noise from window_noise_cov, averaged over models) or a scalar variance
+    (independent levels). kdims (n,): retained dimensions per pair.
+    noise_scale (n,), optional: per-pair multiplier on the noise covariance
+    (e.g. squared model/ERA5 ICV ratio); default 1.
 
-    Fits V = alpha + beta*g per dimension (free intercept absorbs the
-    baseline and its noise). Returns
+    Fits V = alpha + beta*g per dimension (free intercept). The expected
+    residual from noise alone is kdims * tr(A), A = P C P with P the residual
+    projector, so
       rate (n,): |beta|, divergence per deg C
-      nlr  (n,): RSS / (noise_var * dof), ~1 if linear and noise is as assumed
-      pval (n,): chi-square p-value of RSS under linear + noise, dof=(L-2)*kdims
-      alpha, beta (n,K)
-    Overlapping windows correlate the noise and LOWER the residual, so the
-    test is conservative: nlr > 1 is evidence of nonlinearity."""
+      nlr  (n,): RSS / E[RSS | linear + noise]; ~1 if linear (mean, not median)
+      pval (n,): Satterthwaite scaled-chi-square p-value of RSS
+      alpha, beta (n,K)"""
     from scipy.stats import chi2
     g = np.asarray(g, float)
     L = len(g)
+    C = np.eye(L) * noise_cov if np.ndim(noise_cov) == 0 else np.asarray(noise_cov, float)
+    X = np.column_stack([np.ones(L), g])
+    P = np.eye(L) - X @ np.linalg.solve(X.T @ X, X.T)
+    A = P @ C @ P
+    trA, trA2 = np.trace(A), np.trace(A @ A)
     gc = g - g.mean()
     vbar = V.mean(axis=1)                                   # (n,K)
     beta = np.einsum('l,nlk->nk', gc, V - vbar[:, None, :]) / np.sum(gc**2)
     alpha = vbar - beta * g.mean()
     resid = V - (alpha[:, None, :] + beta[:, None, :] * g[None, :, None])
     rss = np.sum(resid**2, axis=(1, 2))
-    dof = (L - 2) * np.asarray(kdims, float)
+    kd = np.asarray(kdims, float)
+    ns = np.ones(len(rss)) if noise_scale is None else np.asarray(noise_scale, float)
+    scale = ns * trA2 / trA                                 # Satterthwaite
+    dof = kd * trA**2 / trA2
     with np.errstate(invalid='ignore', divide='ignore'):
-        nlr = rss / (noise_var * dof)
-        pval = chi2.sf(rss / noise_var, dof)
+        nlr = rss / (ns * kd * trA)
+        pval = chi2.sf(rss / scale, dof)
     rate = np.sqrt(np.sum(beta**2, axis=1))
     return rate, nlr, pval, alpha, beta
 

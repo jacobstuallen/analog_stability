@@ -180,6 +180,7 @@ RETENTION_FILE = os.path.join(OUT_DIR, f'analog_retention{_SFX}.nc')
 STABILITY_FILE = os.path.join(OUT_DIR, f'analog_stability_gwl{_SFX}.nc')
 STABILITY_NPZ = os.path.join(OUT_DIR, f'per_model_biome_sigma{_SFX}.npz')
 SCALING_FILE = os.path.join(OUT_DIR, 'analog_scaling.nc')   # always common models
+MODEL_ICV_FILE = os.path.join(OUT_DIR, 'model_icv_ratio.nc')  # diag.model.icv.py
 
 # ==============================
 # Biomes (WWF major habitat types; 98/99 lake/rock-ice codes not analyzed)

@@ -25,6 +25,15 @@ sigma dissimilarity) stay analogs under global warming levels?
   noise model of `analog.scaling.py`; run it before scaling. `plot/`: figures. `ecoregion/`: ecoregion gridding.
 - `tests/`: synthetic-data regression check (see below).
 
+## Means vs extremes
+`ANALOG_VARSET=means` runs the whole pipeline on annual-mean tas and
+annual-total pr (default `extremes`: TXx, Rx5day), writing to
+`<DATA_ROOT>/analog_stability_means`. Both sets have K=2, so sigma and Dt are
+comparable. Cross-evaluation (means-selected analogs scored on extremes):
+`ANALOG_VARSET=extremes ANALOG_SETS_FILE=<means>/analog_sets.nc
+ANALOG_OUT_DIR=<DATA_ROOT>/analog_stability_cross python analog.retention.py`.
+`compare.varsets.py` prints the side-by-side tables and analog-set overlap.
+
 ## Running on Casper
     qsub -v SCRIPT=analog.set.selection.py pbs.submit.htc
 

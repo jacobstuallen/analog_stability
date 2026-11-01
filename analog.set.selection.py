@@ -272,6 +272,7 @@ def write_output(analog_lat, analog_lon, analog_sig, n_found, s_used, eff_n,
     ds.attrs['n_target'] = N_ANALOGS
     ds.attrs['spacing_ladder_km'] = ', '.join(f'{s:.0f}' for s in S_TRY)
     ds.attrs['variables'] = ', '.join(VKEYS)
+    ds.attrs['variable_set'] = cfg.VARSET
     ds.to_netcdf(outfile)
     print(f'\nSaved: {outfile}')
 

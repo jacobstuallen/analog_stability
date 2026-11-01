@@ -195,13 +195,27 @@ def load_biomes():
     return grid, bmin, bmax
 
 
+def qc_check(arr, qc_max, label, verbose=True):
+    """Report the share of finite values above qc_max; stop if most fail
+    (almost certainly a unit problem, e.g. Kelvin vs degC)."""
+    fin = np.isfinite(arr)
+    if not fin.any():
+        return
+    frac = float(np.mean(arr[fin] > qc_max))
+    if frac > 0.5:
+        raise ValueError(f'{label}: {frac:.0%} of values exceed qc_max={qc_max}; '
+                         f'check units (median {np.nanmedian(arr):.4g})')
+    if verbose and frac > 0:
+        print(f'  QC {label}: {frac:.4%} of values above {qc_max} set to NaN')
+
+
 def load_era5_icv(bmin, bmax, verbose=True):
     """Load ERA5 annual series for every variable over CLIM_START-CLIM_END,
     QC-mask, log1p where configured, detrend.
     Returns clim_mean, icv_sd, icv_series (dicts by variable), icv_corr,
     lat_arr, lon_arr."""
     if verbose:
-        print(f'Variables: {cfg.VKEYS} (K={cfg.K})')
+        print(f'Variable set: {cfg.VARSET} {cfg.VKEYS} (K={cfg.K}); output: {cfg.OUT_DIR}')
         print('Loading ERA5 ICV per variable...')
     clim_mean, icv_sd, icv_series = {}, {}, {}
     lat_arr = lon_arr = None
@@ -214,6 +228,7 @@ def load_era5_icv(bmin, bmax, verbose=True):
             if verbose:
                 print(f'  Grid: {len(lat_arr)} x {len(lon_arr)}, ICV years: {ts.sizes["time"]}')
         arr = ts.values.astype(np.float64)
+        qc_check(arr, v['qc_max'], f'ERA5 {vk}', verbose)
         arr[arr > v['qc_max']] = np.nan
         if v['log']:
             arr = np.log1p(arr)
@@ -267,6 +282,7 @@ def model_window_mean(vk, model, ens, ys, ye, lat_min, lat_max):
     nexp = ye - ys + 1
     if arr.shape[0] != nexp:
         raise ValueError(f'{model} {vk}: {arr.shape[0]} years in {ys}-{ye}, expected {nexp}')
+    qc_check(arr, v['qc_max'], f'{model} {vk} {ys}-{ye}', verbose=False)
     arr[arr > v['qc_max']] = np.nan
     if v['log']:
         arr = np.log1p(arr)

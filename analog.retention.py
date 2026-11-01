@@ -446,6 +446,8 @@ for kk, vk in enumerate(VKEYS):
     ds_out.attrs[f'divabs_units_{vk}'] = ABS_UNITS[vk]
 ds_out.attrs['icv_definition'] = cfg.ICV_DEFINITION
 ds_out.attrs['variables'] = ', '.join(VKEYS)
+ds_out.attrs['variable_set'] = cfg.VARSET
+ds_out.attrs['analog_sets_file'] = cfg.SETS_FILE
 ds_out.attrs['scenario'] = scenario
 ds_out.attrs['gwl_source'] = cfg.GWL_SOURCE
 ds_out.attrs['model_set'] = cfg.MODEL_SET

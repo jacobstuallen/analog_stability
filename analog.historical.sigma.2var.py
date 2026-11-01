@@ -218,6 +218,7 @@ ds_out.attrs['method'] = ('Sigma dissimilarity, Mahony et al. 2017. Per-focal-ce
     'correlation, batched PC rotation, var<0.01 truncation, chi sigma. '
     'Candidates scored against focal-cell ICV (asymmetric Dji).')
 ds_out.attrs['variables'] = ', '.join(VKEYS)
+ds_out.attrs['variable_set'] = cfg.VARSET
 ds_out.attrs['icv_period'] = f'{clim_start}-{clim_end}'
 ds_out.attrs['buffer_km'] = BUFFER_KM
 ds_out.attrs['sigma_convention'] = ('half-normal: sigma = norm.ppf(0.5 + chi.cdf(D,df=m)/2); 0 = identical, monotone increasing, never negative.')

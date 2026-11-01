@@ -15,7 +15,15 @@ import os
 DATA_ROOT = os.environ.get('ANALOG_DATA_ROOT', '/glade/campaign/ral/risc/jsallen/TNC')
 CCKP_ERA5 = f'{DATA_ROOT}/CCKP/ERA5'
 CCKP_CMIP6 = f'{DATA_ROOT}/CCKP/CMIP6'
-OUT_DIR = os.environ.get('ANALOG_OUT_DIR', f'{DATA_ROOT}/analog_stability')
+# Variable set (env ANALOG_VARSET): 'extremes' (TXx, Rx5day; the paper's main
+# set) or 'means' (annual-mean tas, annual-total pr; the conventional analog
+# variables, for the means-vs-extremes comparison). Each set writes to its
+# own output folder so runs never overwrite each other.
+VARSET = os.environ.get('ANALOG_VARSET', 'extremes')
+if VARSET not in ('extremes', 'means'):
+    raise ValueError(f'unknown ANALOG_VARSET {VARSET!r}')
+_OUT_DEFAULT = f'{DATA_ROOT}/analog_stability' + ('' if VARSET == 'extremes' else '_means')
+OUT_DIR = os.environ.get('ANALOG_OUT_DIR', _OUT_DEFAULT)
 BIOME_FILE = os.environ.get(
     'ANALOG_BIOME_FILE',
     '/glade/u/home/jsallen/projects/tnc_2025/analogs/biomes/biomes.analog.gridded.nc')
@@ -26,7 +34,11 @@ ECO_FILE = os.environ.get(
 # Output files
 HIST_SIGMA_FILE = os.path.join(OUT_DIR, 'analog_historical_sigma.nc')
 HIST_DIST_FILE = os.path.join(OUT_DIR, 'analog_historical_dist_summary.npz')
-SETS_FILE = os.path.join(OUT_DIR, 'analog_sets.nc')
+# ANALOG_SETS_FILE: evaluate retention on ANOTHER variable set's analogs
+# (cross-evaluation, e.g. means-selected analogs scored on extremes). GWL0
+# retention is then < 1 by design: those analogs were not gated on these
+# variables.
+SETS_FILE = os.environ.get('ANALOG_SETS_FILE', os.path.join(OUT_DIR, 'analog_sets.nc'))
 # RETENTION_FILE, STABILITY_FILE, STABILITY_NPZ: set below (depend on MODEL_SET)
 
 # ==============================
@@ -72,7 +84,7 @@ def _era5_ts(token):
     return (f'{CCKP_ERA5}/timeseries-{token}-annual-mean_era5-x0.25_'
             f'era5-x0.25-historical_timeseries_mean_1950-2024.nc')
 
-VARIABLES = {
+_VARIABLE_SETS = {'extremes': {
     'txx': {
         'era5_ts': _era5_ts('txx'),
         'era5_var': 'timeseries-txx-annual-mean',
@@ -87,7 +99,23 @@ VARIABLES = {
         'log': True,
         'qc_max': 3000.0,
     },
-}
+}, 'means': {
+    'tas': {                       # annual mean near-surface temperature (degC)
+        'era5_ts': _era5_ts('tas'),
+        'era5_var': 'timeseries-tas-annual-mean',
+        'cckp_token': 'tas',
+        'log': False,
+        'qc_max': 60.0,
+    },
+    'pr': {                        # annual TOTAL precipitation (mm), CCKP 'sum'
+        'era5_ts': _era5_ts('pr'),
+        'era5_var': 'timeseries-pr-annual-mean',
+        'cckp_token': 'pr',
+        'log': True,               # same multiplicative treatment as Rx5day
+        'qc_max': 15000.0,         # world record ~12,000 mm/yr
+    },
+}}
+VARIABLES = _VARIABLE_SETS[VARSET]
 VKEYS = list(VARIABLES.keys())
 K = len(VKEYS)
 

@@ -222,6 +222,7 @@ ds_out.attrs['method'] = (
     f'baseline (ERA5 ICV units, two cells, M models); frac_nonlin = fraction of pairs with '
     f'Satterthwaite p<{P_CRIT}. Cell values: median over the analog set.')
 ds_out.attrs['models'] = ', '.join(models)
+ds_out.attrs['variable_set'] = cfg.VARSET
 ds_out.attrs['n_models'] = M
 ds_out.attrs['noise_var_by_gwl'] = ', '.join(f'{x:.5f}' for x in np.diag(noise_cov))
 ds_out.attrs['icv_ratio_applied'] = int(icv_ratio2 is not None)

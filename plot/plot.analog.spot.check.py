@@ -18,20 +18,16 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
-data_root = '/glade/campaign/ral/risc/jsallen/TNC'
-out_dir = f'{data_root}/analog_stability'
-sets_file = os.path.join(out_dir, 'analog_sets.nc')
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import plot_common as pcm  # noqa: E402
+from plot_common import cfg  # noqa: E402
 
-biomes = {
-    1:'Boreal Forests/Taiga', 2:'Deserts & Xeric Shrublands',
-    3:'Flooded Grasslands & Savannas', 4:'Mangroves',
-    5:'Mediterranean Forests, Woodlands & Scrub', 6:'Montane Grasslands & Shrublands',
-    7:'Rock and Ice', 8:'Temperate Broadleaf & Mixed Forests',
-    9:'Temperate Conifer Forests', 10:'Temperate Grasslands, Savannas & Shrublands',
-    11:'Tropical & Subtropical Coniferous Forests', 12:'Tropical & Subtropical Dry Broadleaf Forests',
-    13:'Tropical & Subtropical Grasslands, Savannas & Shrublands',
-    14:'Tropical & Subtropical Moist Broadleaf Forests', 15:'Tundra',
-}
+pcm.setup_style()
+sets_file = cfg.SETS_FILE
+out_dir = pcm.FIG_DIR
+os.makedirs(out_dir, exist_ok=True)
+biomes = cfg.BIOMES
 
 # focal examples: (label, target_lat, target_lon). We snap to the nearest cell
 # that actually has analogs
@@ -126,7 +122,7 @@ cax = fig.add_axes([0.30,0.08,0.40,0.016])
 cbar = plt.colorbar(sc, cax=cax, orientation='horizontal', label=r'Historical $\sigma$')
 
 f1 = os.path.join(out_dir, 'analog_sets_spotcheck_maps.png')
-fig.savefig(f1, dpi=400); plt.show()
+fig.savefig(f1, dpi=400); plt.close(fig)
 print(f'Saved: {f1}')
 
 # also print the Texas set to console for an exact-number sanity read

@@ -1,218 +1,110 @@
 #!/bin/python
 #
-# Retention + attribution MAPS from analog_retention.nc.
-# Three figures:
-#   (1) retention_maps.png   : retention at GWL2 & GWL3, strict (Dt=1) and
-#       loose (Dt=2) thresholds. The headline "where do analogs survive".
-#   (2) attribution_maps.png : at GWL3, the TXx share of pair divergence and
-#       divergence on one global ICV ruler (ICV-free check, issue B), so
-#       low-retention regions can be read as magnitude- vs direction-driven.
-#   (3) retention_curves.png : retention(Dt) curves per biome, the honest
-#       threshold-free object (no single Dt assumed).
+# Retention + attribution maps, and retention(Dt) curves, from
+# analog_retention.nc. Central estimate set by ANALOG_HEADLINE (plot_common).
 #
-# COVERAGE MASK: cells where selection was compromised (n_analogs < N_FULL or
-# s_used < 500 km) are drawn in light grey, NOT colored. This separates the
-# retention signal (analogs that diverged) from selection-stage scarcity
-# (analogs that were marginal to begin with) -- the confound we flagged.
-# Set MASK_LOW_COVERAGE=False to show everything.
-
+#   retention_maps.png   (SI): central retention at a low and a high GWL,
+#       Dt=1 and Dt=2. The main-text map is plot.retention.tiers.py.
+#   attribution_maps.png (main): at ATTR_GWL, forced (mmm) pair divergence
+#       on the local-ICV ruler vs one global ICV ruler (same color scale), and
+#       the TXx share of divergence^2. If the tropical maximum survives the
+#       global ruler, it is not an artifact of narrow local ICV (issue B).
+#   retention_curves.png (SI): retention(Dt) per biome at every GWL.
+#
+# COVERAGE MASK: cells with compromised selection (n_analogs < N_ANALOGS or
+# spacing relaxed below S_TRY[0]) are grey on maps. Curves use all cells with
+# >= 1 analog, area-weighted (issue I).
 import numpy as np
-import xarray as xr
-import os
-import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 import colormaps as cmaps
-HAVE_CARTOPY = True
+import plot_common as pcm
+from plot_common import wmean, wmedian, gwl_label
 
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-import analog_config as cfg
-from analog_common import area_weights, wmean
+pcm.setup_style()
+R = pcm.Retention(mask_low_coverage=True)
+ds = R.ds
 
-out_dir = cfg.OUT_DIR
-ret_file = cfg.RETENTION_FILE
-sets_file = cfg.SETS_FILE
-
-MASK_LOW_COVERAGE = True
-N_FULL = cfg.N_ANALOGS   # full analog set size
-S_FULL = cfg.S_TRY[0]    # full spacing (cells below this were relaxed)
-DT_STRICT, DT_LOOSE = 1.0, 2.0
-
-print(f"Loading {ret_file} ...")
-ds = xr.open_dataset(ret_file)
-lat = ds['lat'].values; lon = ds['lon'].values
-Dt = ds['Dt'].values
-biome_id = ds['biome_id'].values
-n_analogs = ds['n_analogs'].values
-
-sets = xr.open_dataset(sets_file)
-s_used = sets['s_used_km'].values
-
-# coverage mask: True = KEEP (well covered)
-if MASK_LOW_COVERAGE:
-    keep = (n_analogs >= N_FULL) & (s_used >= S_FULL)
-else:
-    keep = np.isfinite(n_analogs) & (n_analogs > 0)
-land = np.isfinite(biome_id) & (biome_id > 0)
-
-
-def di_of(dt_val):
-    return int(np.argmin(np.abs(Dt - dt_val)))
-
-
-def masked_field(arr2d):
-    """Return arr with non kept land cells set NaN (so they draw as the
-    'bad' grey under-color), ocean stays fully transparent."""
-    out = np.full_like(arr2d, np.nan, dtype=float)
-    sel = keep & np.isfinite(arr2d)
-    out[sel] = arr2d[sel]
-    return out
-
-def plot_background(ax):
-    """ Cartopy ax settings helper """
-    xticks = np.arange(-180,180,60)
-    yticks = np.arange(-60,90,30)
-    #ax.set_yticks(yticks, crs=pcrs)
-    #ax.set_xticks(xticks, crs=pcrs)
-    ax.set_extent([-180,180,-60,90])
-    ax.add_feature(cfeature.COASTLINE.with_scale('50m'), linewidth=0.4, zorder=3)
-    ax.add_feature(cfeature.OCEAN, facecolor='whitesmoke', zorder=2)
-    ax.add_feature(cfeature.BORDERS, linewidth=0.3, alpha=0.7, zorder=3)
-    return(ax)
-
-def add_map(ax, field, cmap, vmin, vmax, title, cbar_label, greylayer=True):
-
-    #ax.set_global()
-    #ax.add_feature(cfeature.OCEAN, facecolor='white', zorder=0)
-
-    if greylayer:
-        # light-grey backdrop on land so masked land reads as "covered but
-        # excluded", distinct from ocean
-        grey = np.where(land, 0.85, np.nan)
-        ax.pcolormesh(lon, lat, grey, cmap=ListedColormap(['0.85']),
-                      vmin=0, vmax=1, transform=ccrs.PlateCarree(), zorder=1)
-    cm = plt.get_cmap(cmap).copy()
-    pm = ax.pcolormesh(lon, lat, field, cmap=cm, vmin=vmin, vmax=vmax,
-                       transform=ccrs.PlateCarree(), zorder=2)
-    #ax.add_feature(cfeature.COASTLINE, lw=0.3, zorder=3)
-    plot_background(ax)
-
-    ax.set_title(title, fontsize=10)
-    #cb = plt.colorbar(pm, ax=ax, shrink=0.65, pad=0.02)
-    #cb.set_label(cbar_label, fontsize=8)
-    return(pm)
-
-proj = dict(projection=ccrs.Robinson()) if HAVE_CARTOPY else {}
+ATTR_GWL = 'gwl4' if 'gwl4' in R.gwls else R.gwls[-1]
+MAP_GWLS = [g for g in ('gwl2', 'gwl4') if g in R.gwls] or [R.gwls[0], R.gwls[-1]]
 
 # ==============================
-# FIG 1: retention maps (2 GWL x 2 Dt)
+# FIG 1 (SI): central retention maps, 2 GWL x 2 Dt
 # ==============================
-fig, axes = plt.subplots(2, 2, figsize=(11, 6), subplot_kw=proj)
-panels = [
-    ('gwl2', DT_STRICT, axes[0, 0]), ('gwl2', DT_LOOSE, axes[0, 1]),
-    ('gwl3', DT_STRICT, axes[1, 0]), ('gwl3', DT_LOOSE, axes[1, 1]),
-]
-
-i = 0
-let = ['a)','b)','c)','d)']
-for g, dt_val, ax in panels:
-    fld = masked_field(ds[f'retention_{g}'].values[:, :, di_of(dt_val)])
-    pm = add_map(ax, fld, cmaps.precip_diff_12lev, 0.0, 1.0,
-            f'{let[i]} {g.upper()}  retention at Dt={dt_val}',
-            'fraction of analogs retained')
-
-    fig.subplots_adjust(
-        top=0.95, bottom=0.13,
-        left=0.05, right=0.95,
-        hspace=0.18, wspace=0.08)
-
-    cax = fig.add_axes([0.30,0.08,0.40,0.016])
-    cbar = plt.colorbar(pm, cax=cax, orientation='horizontal', label=r'Fraction of analogs retained')
-    i+=1
-
-#fig.suptitle('Analog retention: fraction of present-day analogs still analogs under warming\n'
-#             '(grey = low-coverage cells excluded)', fontsize=12)
-
-#fig.tight_layout()
-f1 = os.path.join(out_dir, 'retention_maps.png')
-fig.savefig(f1, dpi=400, bbox_inches='tight'); plt.close(fig)
-print(f'Saved: {f1}')
+fig = plt.figure(figsize=(11, 3.1 * len(MAP_GWLS) + 0.6))
+gs = fig.add_gridspec(len(MAP_GWLS), 2, hspace=0.12, wspace=0.05,
+                      top=0.95, bottom=0.12, left=0.03, right=0.97)
+let = iter('abcdefgh')
+for r, g in enumerate(MAP_GWLS):
+    for c, dt in enumerate((pcm.DT_STRICT, pcm.DT_LOOSE)):
+        ax = pcm.map_axes(fig, gs[r, c])
+        pm = pcm.add_map(ax, R, R.masked(R.central(g, dt)), cmaps.precip_diff_12lev, 0, 1,
+                         f'{next(let)}) {gwl_label(g)}, D$_t$ = {dt:g}$\\sigma$')
+cax = fig.add_axes([0.30, 0.06, 0.40, 0.018])
+fig.colorbar(pm, cax=cax, orientation='horizontal',
+             label=f'Fraction of analogs retained ({R.central_label()})')
+pcm.savefig(fig, 'retention_maps.png')
 
 # ==============================
-# FIG 2: attribution at GWL3 (which variable; is it the ICV ruler?)
+# FIG 2: attribution at ATTR_GWL (forced response)
 # ==============================
-fig, axes = plt.subplots(1, 2, figsize=(15, 4.5), subplot_kw=proj)
-# TXx share of divergence^2: 1 = all TXx, 0 = all Rx5day (can leave [0,1]
-# slightly when ICV is correlated)
-pm0 = add_map(axes[0], masked_field(ds['share_txx_div_gwl3'].values), 'PuOr', 0.0, 1.0,
-              'a) GWL3 TXx share of pair divergence (0 = all Rx5day)',
-              'share of divergence$^2$')
-plt.colorbar(pm0, ax=axes[0], orientation='horizontal', shrink=0.6, pad=0.04,
-             label='TXx share of divergence$^2$')
-# divergence on one global ICV ruler: if the tropical maximum survives here,
-# it is not an artifact of small local ICV
-dc = ds['divcommon_gwl3'].values
-pm1 = add_map(axes[1], masked_field(dc), 'viridis', 0.0, float(np.nanpercentile(dc[keep], 98)),
-              'b) GWL3 pair divergence, one global ICV ruler',
-              'divergence (global-ICV units)')
-plt.colorbar(pm1, ax=axes[1], orientation='horizontal', shrink=0.6, pad=0.04,
-             label='divergence (global-ICV units)')
-fig.tight_layout()
-f2 = os.path.join(out_dir, 'attribution_maps.png')
-fig.savefig(f2, dpi=130, bbox_inches='tight'); plt.close(fig)
-print(f'Saved: {f2}')
+div_loc = ds[f'divergence_mmm_{ATTR_GWL}'].values
+div_glb = ds[f'divcommon_mmm_{ATTR_GWL}'].values
+share = ds[f'share_txx_div_mmm_{ATTR_GWL}'].values
+vmax = float(np.nanpercentile(np.r_[div_loc[R.keep], div_glb[R.keep]], 98))
+floor = ds.attrs.get(f'noise_floor_div_mmm_{ATTR_GWL}', np.nan)
+
+fig = plt.figure(figsize=(16, 4.4))
+gs = fig.add_gridspec(1, 3, wspace=0.05, top=0.92, bottom=0.18, left=0.02, right=0.98)
+ax = pcm.map_axes(fig, gs[0, 0])
+pm0 = pcm.add_map(ax, R, R.masked(div_loc), 'viridis', 0, vmax,
+                  f'a) Pair divergence, local ICV ruler ({gwl_label(ATTR_GWL)})')
+ax = pcm.map_axes(fig, gs[0, 1])
+pcm.add_map(ax, R, R.masked(div_glb), 'viridis', 0, vmax,
+            f'b) Pair divergence, one global ICV ruler ({gwl_label(ATTR_GWL)})')
+cax = fig.add_axes([0.10, 0.12, 0.46, 0.025])
+cb = fig.colorbar(pm0, cax=cax, orientation='horizontal', extend='max')
+cb.set_label(f'Median divergence over analogs (ICV units; noise floor {floor:.2f})')
+ax = pcm.map_axes(fig, gs[0, 2])
+pm2 = pcm.add_map(ax, R, R.masked(share), 'PuOr_r', 0, 1,
+                  f'c) TXx share of divergence$^2$ ({gwl_label(ATTR_GWL)})')
+cax = fig.add_axes([0.72, 0.12, 0.22, 0.025])
+fig.colorbar(pm2, cax=cax, orientation='horizontal',
+             label='0 = all Rx5day, 1 = all TXx')
+pcm.savefig(fig, 'attribution_maps.png')
 
 # ==============================
-# FIG 3: retention(Dt) curves per biome (threshold-free)
+# FIG 3 (SI): retention(Dt) curves per biome, every GWL
 # ==============================
-biomes = {
-    1:'Boreal', 2:'Deserts', 3:'Flooded Grasslands', 5:'Mediterranean',
-    6:'Montane Grass', 7:'Rock & Ice', 8:'Temperate Broadleaf',
-    9:'Temperate Conifer', 10:'Temperate Grass', 11:'Trop Coniferous',
-    12:'Trop Dry Broadleaf', 13:'Trop Grasslands', 14:'Trop Moist Broadleaf',
-    15:'Tundra',
-}
-# Curves are cos(lat) AREA-WEIGHTED means over all cells with >= 1 analog
-# (issue I). Conditioning on full analog sets is optional (CURVES_FULL_SETS_ONLY)
-# because it drops exactly the cells with scarce analogs.
-CURVES_FULL_SETS_ONLY = False
-W = area_weights(lat, len(lon))
-gwls_plot = [g for g in cfg.GWLS if g != 'gwl0' and f'retention_{g}' in ds]
-fig, axes = plt.subplots(1, len(gwls_plot), figsize=(5 * len(gwls_plot), 5), sharey=True)
-axes = np.atleast_1d(axes)
+blist = R.biomes()
 cmap = plt.get_cmap('tab20')
-for ax, g in zip(axes, gwls_plot):
-    ret = ds[f'retention_{g}'].values   # (nlat,nlon,nDt)
-    for ci, (b, bn) in enumerate(biomes.items()):
-        bm = (biome_id == b) & ((keep) if CURVES_FULL_SETS_ONLY else (n_analogs > 0))
-        if bm.sum() < 50:
-            continue
-        curve = [wmean(ret[bm, di], W[bm]) for di in range(len(Dt))]
-        ax.plot(Dt, curve, color=cmap(ci % 20), lw=1.4, label=bn)
-    ax.set_title(f'{g.upper()}'); ax.set_xlabel('Dt (sigma threshold)')
-    ax.set_ylim(0, 1); ax.grid(alpha=0.3)
-axes[0].set_ylabel('area-weighted mean fraction retained')
-axes[-1].legend(fontsize=7, ncol=1, loc='lower right')
-fig.suptitle('Retention vs threshold, per biome (area-weighted; '
-             + ('full analog sets only' if CURVES_FULL_SETS_ONLY else 'all cells with analogs') + ')',
-             fontsize=12)
+fig, axes = plt.subplots(1, len(R.gwls), figsize=(4.2 * len(R.gwls), 4.4), sharey=True)
+axes = np.atleast_1d(axes)
+for ax, g in zip(axes, R.gwls):
+    ret = R.central(g)
+    for ci, (b, name, bm) in enumerate(blist):
+        curve = [wmean(ret[bm, k], R.W[bm]) for k in range(len(R.Dt))]
+        ax.plot(R.Dt, curve, color=cmap(ci % 20), lw=1.3, label=name)
+    for dt in (pcm.DT_STRICT, pcm.DT_LOOSE):
+        ax.axvline(dt, color='0.5', lw=0.6, ls=':')
+    ax.set_title(f'{gwl_label(g)} ({R.n_models(g)} models)', fontsize=10)
+    ax.set_xlabel(r'D$_t$ ($\sigma$)')
+    ax.set_ylim(0, 1.02); ax.grid(alpha=0.3)
+axes[0].set_ylabel('Area-weighted mean fraction retained')
+axes[-1].legend(fontsize=6.5, loc='lower right')
+fig.suptitle(f'Retention vs threshold by biome: {R.central_label()}', fontsize=11)
 fig.tight_layout()
-f3 = os.path.join(out_dir, 'retention_curves.png')
-fig.savefig(f3, dpi=400, bbox_inches='tight'); plt.close(fig)
-print(f'Saved: {f3}')
+pcm.savefig(fig, 'retention_curves.png')
 
 # ==============================
-# console: how much area is masked per biome
+# console
 # ==============================
-print('\n--- coverage retained per biome (% of land cells kept) ---')
-for b, bn in biomes.items():
-    bm = (biome_id == b) & land
-    if bm.sum() == 0:
-        continue
-    pct = 100.0 * np.mean(keep[bm])
-    print(f'  {bn:<22} {pct:>5.1f}% kept')
-
+print(f'\n--- {ATTR_GWL} forced divergence, area-weighted median: local vs global ruler ---')
+for b, name, bm in blist:
+    print(f'  {name:<24} {wmedian(div_loc[bm], R.W[bm]):6.2f} {wmedian(div_glb[bm], R.W[bm]):6.2f}'
+          f'   TXx share {wmedian(share[bm], R.W[bm]):.2f}')
+print('\n--- coverage kept per biome (% of land cells) ---')
+for b, name in pcm.BIOME_SHORT.items():
+    bm = (R.biome_id == b) & R.land
+    if bm.sum():
+        print(f'  {name:<24} {100 * np.mean(R.keep[bm]):5.1f}%')
 print('\nDone.')

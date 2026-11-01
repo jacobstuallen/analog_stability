@@ -13,3 +13,9 @@ divergence. Both are now separated in `analog.retention.py`
 Plot and diag scripts here read `analog_stability_gwl.nc` /
 `per_model_biome_sigma.npz` written by that script. Run from the repo root:
 `python legacy/analog.future.stability.py`.
+
+## Retired 2026-11-01
+- `figures/`: figures from the single-best-analog pipeline (first draft).
+- `plot.methods.summary.py` (older ICV construction) and
+  `plot.methods.summary.global.py`. The current methods figure is
+  `plot/plot.methods.summary.py` (formerly `plot.methods.summary.02.py`).

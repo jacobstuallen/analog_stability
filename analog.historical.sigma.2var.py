@@ -50,7 +50,7 @@ import time
 
 import analog_config as cfg
 from analog_common import (load_biomes, load_era5_icv, haversine_km,
-                           sigma_from_distance)
+                           sigma_from_distance, ensure_out_dir)
 
 # Settings live in analog_config.py; aliased here so the body reads as before.
 out_dir = cfg.OUT_DIR
@@ -205,7 +205,7 @@ for b, bname in biomes.items():
 
 # alright alright alright - let's save some data to loook at
 # -----------------------------------------------------------
-os.makedirs(out_dir, exist_ok=True)
+ensure_out_dir(out_dir)
 print('\nSaving netCDF...')
 ds_out = xr.Dataset(coords={'lat': lat_arr, 'lon': lon_arr})
 ds_out['sigma_best'] = (['lat', 'lon'], sigma_best)

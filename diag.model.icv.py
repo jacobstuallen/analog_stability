@@ -22,7 +22,7 @@ import os
 import warnings
 
 import analog_config as cfg
-from analog_common import load_biomes, load_era5_icv, cckp_ts_path, _read_years
+from analog_common import load_biomes, load_era5_icv, cckp_ts_path, _read_years, ensure_out_dir
 from icv_utils import detrend_icv
 
 VKEYS = cfg.VKEYS
@@ -68,6 +68,7 @@ ds.attrs['method'] = (
     f'{cfg.SCENARIO} 2015-2020; same QC, log1p and detrending as ERA5). '
     'ratio_<var>: median over models; _p10/_p90 across models.')
 ds.attrs['models'] = ', '.join(models_used)
+ensure_out_dir(cfg.OUT_DIR)
 ds.to_netcdf(cfg.MODEL_ICV_FILE)
 print(f'\nSaved: {cfg.MODEL_ICV_FILE}')
 

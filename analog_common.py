@@ -252,16 +252,46 @@ def cckp_ts_path(token, model, ensemble, scen):
     return os.path.join(cfg.CCKP_CMIP6, token, folder, fname)
 
 
+_TIME_FIXED = set()
+
+
 def _read_years(filepath, varname, ys, ye, lat_min, lat_max):
     """Annual values for [ys, ye] inclusive -> (T, nlat, nlon), or None if
-    the file has no years in range."""
+    the file has no years in range.
+
+    Selects by calendar YEAR after sorting the time axis and keeping the
+    first record of any repeated year, so unsorted or duplicated time axes
+    (seen in some CCKP files) cannot break or double-count a window. Any
+    file needing this is reported once."""
     ds = xr.open_dataset(filepath).sortby('lat').sel(lat=slice(lat_min, lat_max))
     da = ds[varname] if varname in ds else ds[
         [v for v in ds.data_vars if 'bnds' not in v and ds[v].ndim >= 2][0]]
-    da = da.sel(time=slice(str(ys), str(ye)))
-    arr = da.values.astype(np.float64) if da.sizes['time'] > 0 else None
+    yrs = np.asarray(da['time'].dt.year.values)
+    order = np.argsort(yrs, kind='stable')
+    _, first = np.unique(yrs[order], return_index=True)
+    keep = order[first]                                   # sorted, one per year
+    if (len(keep) != len(yrs) or np.any(np.diff(yrs) <= 0)) and filepath not in _TIME_FIXED:
+        _TIME_FIXED.add(filepath)
+        print(f'  WARNING time axis repaired (unsorted or {len(yrs) - len(keep)} repeated '
+              f'years): {os.path.basename(filepath)}', flush=True)
+    sel = keep[(yrs[keep] >= ys) & (yrs[keep] <= ye)]
+    arr = da.isel(time=sel).values.astype(np.float64) if len(sel) > 0 else None
     ds.close()
     return arr
+
+
+def ensure_out_dir(path):
+    """Create an output folder with the same permission bits as its parent.
+    (On campaign storage, folders made from batch jobs came out without the
+    execute bit, drw-rwS---, so nothing could be written inside.)"""
+    if not os.path.isdir(path):
+        os.makedirs(path, exist_ok=True)
+        try:
+            parent = os.path.dirname(os.path.abspath(path.rstrip('/')))
+            os.chmod(path, os.stat(parent).st_mode & 0o7777)
+        except OSError as e:
+            print(f'  WARNING could not set permissions on {path}: {e}')
+    return path
 
 
 def model_window_mean(vk, model, ens, ys, ye, lat_min, lat_max):

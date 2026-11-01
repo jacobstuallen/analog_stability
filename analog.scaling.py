@@ -39,7 +39,7 @@ import warnings
 import analog_config as cfg
 from analog_common import (load_biomes, load_era5_icv, load_future_gwl,
                            grid_indices, focal_eig, pc_whiten, linear_fit_nlr,
-                           window_noise_cov)
+                           window_noise_cov, ensure_out_dir)
 
 # ==============================
 # Configuration
@@ -208,7 +208,7 @@ for b, bname in biomes.items():
 # ==============================
 # Save
 # ==============================
-os.makedirs(cfg.OUT_DIR, exist_ok=True)
+ensure_out_dir(cfg.OUT_DIR)
 ds_out = xr.Dataset(coords={'lat': lat_arr, 'lon': lon_arr})
 for k, arr in out.items():
     ds_out[k] = (['lat', 'lon'], arr)

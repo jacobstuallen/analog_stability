@@ -46,12 +46,11 @@
 
 import numpy as np
 import xarray as xr
-import os
 import time
 
 import analog_config as cfg
 from analog_common import (load_biomes, load_era5_icv, haversine_km,
-                           sigma_from_distance)
+                           sigma_from_distance, ensure_out_dir)
 
 # ==============================
 # Configuration (edit in analog_config.py; aliased here)
@@ -247,7 +246,7 @@ def select_analog_sets():
 
 def write_output(analog_lat, analog_lon, analog_sig, n_found, s_used, eff_n,
                  biome_grid, lat_arr, lon_arr):
-    os.makedirs(out_dir, exist_ok=True)
+    ensure_out_dir(out_dir)
     nrank = np.arange(N_ANALOGS)
     ds = xr.Dataset(
         coords={'lat': lat_arr, 'lon': lon_arr, 'rank': nrank},

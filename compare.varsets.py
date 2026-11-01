@@ -22,7 +22,7 @@ import numpy as np
 import xarray as xr
 
 import analog_config as cfg
-from analog_common import area_weights, wmean, wmedian, haversine_km
+from analog_common import area_weights, wmean, wmedian, haversine_km, ensure_out_dir
 
 EXT = os.environ.get('ANALOG_EXT_DIR', f'{cfg.DATA_ROOT}/analog_stability')
 MEA = os.environ.get('ANALOG_MEANS_DIR', f'{cfg.DATA_ROOT}/analog_stability_means')
@@ -75,7 +75,7 @@ out['overlap_means_in_ext'] = (['lat', 'lon'], ov_me)
 out['biome_id'] = (['lat', 'lon'], biome.astype(np.float32))
 out.attrs['method'] = (f'Share of one set\'s analogs with an analog of the other set within '
                        f'{OVERLAP_KM:.0f} km (extremes = {EXT}, means = {MEA}).')
-os.makedirs(MEA, exist_ok=True)
+ensure_out_dir(MEA)
 out.to_netcdf(f'{MEA}/compare_varsets.nc')
 
 

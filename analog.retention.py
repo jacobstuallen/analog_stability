@@ -54,7 +54,7 @@ from analog_common import (load_biomes, load_era5_icv, load_future_gwl,
                            grid_index_lookup, dt_grid, pc_sigma, pc_whiten,
                            sigma_by_dims, mahal_var_shares, window_noise_cov,
                            area_weights, wmean, wmedian,
-                           focal_eig as _focal_eig)
+                           focal_eig as _focal_eig, ensure_out_dir)
 
 # ==============================
 # Configuration (edit in analog_config.py; aliased here)
@@ -401,7 +401,7 @@ for b, bname in biomes.items():
 # ==============================
 # Save
 # ==============================
-os.makedirs(out_dir, exist_ok=True)
+ensure_out_dir(out_dir)
 ds_out = xr.Dataset(coords={'lat': lat_arr, 'lon': lon_arr, 'Dt': DT_GRID})
 for k, arr in out.items():
     if arr.ndim == 3:

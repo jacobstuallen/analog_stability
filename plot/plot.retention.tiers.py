@@ -3,9 +3,10 @@
 # Headline figures: where analogs hold, and how sure we are.
 #
 #   retention_tier_maps.png: central retention (ANALOG_HEADLINE) at Dt=1 for
-#       a low and a high GWL. Stippling marks 2.5 deg blocks where most kept
-#       cells have > half of their analogs UNCERTAIN (models disagree:
-#       retained by > 20% and < 80% of models).
+#       a low and a high GWL. Dots mark 2.5 deg blocks where most kept
+#       cells have >= ROBLOST_MAJORITY of their analogs ROBUSTLY LOST (lost in
+#       >= 80% of models, i.e. retained by <= 20%). Model agreement, as in the
+#       IPCC AR6 convention; uncertain and robustly retained shares are in the bars.
 #   retention_tier_bars.png: per biome and GWL, area-weighted fraction of
 #       analogs robustly retained / uncertain / robustly lost (80% model
 #       agreement; robret_/uncert_/roblost_), at Dt=1 and Dt=2. Right column:
@@ -20,7 +21,7 @@ pcm.setup_style()
 R = pcm.Retention()
 ds = R.ds
 MAP_GWLS = [g for g in ('gwl2', 'gwl4') if g in R.gwls] or [R.gwls[0], R.gwls[-1]]
-UNCERT_MAJORITY = 0.5
+ROBLOST_MAJORITY = 0.5   # share of a cell's analogs robustly lost
 STIPPLE_BLOCK = max(1, int(round(2.5 / abs(float(R.lat[1] - R.lat[0])))))
 
 # ==============================
@@ -35,12 +36,12 @@ for c, g in enumerate(MAP_GWLS):
     pm = pcm.add_map(ax, R, R.masked(R.central(g, dt)), cmap_ret, None, None,
                      f'{"abcd"[c]}) {gwl_label(g)}, D$_t$ = {dt:g}$\\sigma$ ({R.n_models(g)} models)',
                      norm=norm_ret)
-    unc = ds[f'uncert_{g}_{dt_tag(dt)}'].values
-    pcm.coarse_stipple(ax, R, np.nan_to_num(unc) > UNCERT_MAJORITY, block=STIPPLE_BLOCK)
+    lost = ds[f'roblost_{g}_{dt_tag(dt)}'].values
+    pcm.coarse_stipple(ax, R, np.nan_to_num(lost) >= ROBLOST_MAJORITY, block=STIPPLE_BLOCK)
 cax = fig.add_axes([0.08, 0.13, 0.48, 0.03])
 pcm.retention_colorbar(fig, cax, pm, f'Fraction of analogs retained, {R.central_label()}')
 leg_h = [plt.Line2D([], [], ls='', marker='o', ms=3.5, mfc='k', mec='white', mew=0.4,
-                    label='Most analogs uncertain\n(retained by 20-80% of models)'),
+                    label=f'\u2265{ROBLOST_MAJORITY:.0%} of analogs robustly lost\n(lost in \u226580% of models)'),
          plt.Rectangle((0, 0), 1, 1, fc=pcm.COVERAGE_GREY, ec='none', label=pcm.COVERAGE_LABEL)]
 fig.legend(handles=leg_h, loc='center left', bbox_to_anchor=(0.62, 0.145), fontsize=8,
            frameon=False, handlelength=1.2, labelspacing=0.8)

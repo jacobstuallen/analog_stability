@@ -204,4 +204,6 @@ def coarse_stipple(ax, R, flag2d, block=10, frac=0.5, **kw):
     # black dot with a white rim: visible on both light and dark classes
     style = dict(s=4, c='k', marker='o', edgecolors='white', linewidths=0.35, zorder=4)
     style.update(kw)
-    ax.scatter(xs, ys, transform=ccrs.PlateCarree(), **style)
+    if xs:
+        ax.scatter(xs, ys, transform=ccrs.PlateCarree(), **style)
+    return len(xs)

@@ -16,7 +16,6 @@
 # >= 1 analog, area-weighted (issue I).
 import numpy as np
 import matplotlib.pyplot as plt
-import colormaps as cmaps
 import plot_common as pcm
 from plot_common import wmean, wmedian, gwl_label
 
@@ -34,14 +33,15 @@ fig = plt.figure(figsize=(11, 3.1 * len(MAP_GWLS) + 0.6))
 gs = fig.add_gridspec(len(MAP_GWLS), 2, hspace=0.12, wspace=0.05,
                       top=0.95, bottom=0.12, left=0.03, right=0.97)
 let = iter('abcdefgh')
+cmap_ret, norm_ret = pcm.retention_cmap_norm()
 for r, g in enumerate(MAP_GWLS):
     for c, dt in enumerate((pcm.DT_STRICT, pcm.DT_LOOSE)):
         ax = pcm.map_axes(fig, gs[r, c])
-        pm = pcm.add_map(ax, R, R.masked(R.central(g, dt)), cmaps.precip_diff_12lev, 0, 1,
-                         f'{next(let)}) {gwl_label(g)}, D$_t$ = {dt:g}$\\sigma$')
+        pm = pcm.add_map(ax, R, R.masked(R.central(g, dt)), cmap_ret, None, None,
+                         f'{next(let)}) {gwl_label(g)}, D$_t$ = {dt:g}$\\sigma$', norm=norm_ret)
 cax = fig.add_axes([0.30, 0.06, 0.40, 0.018])
-fig.colorbar(pm, cax=cax, orientation='horizontal',
-             label=f'Fraction of analogs retained ({R.central_label()})')
+pcm.retention_colorbar(fig, cax, pm, f'Fraction of analogs retained, {R.central_label()}\n'
+                                     f'Grey: {pcm.COVERAGE_LABEL}')
 pcm.savefig(fig, 'retention_maps.png')
 
 # ==============================

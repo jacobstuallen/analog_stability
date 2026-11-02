@@ -13,7 +13,6 @@
 #       (~1 = noise, ~0 = model disagreement). Area-weighted median.
 import numpy as np
 import matplotlib.pyplot as plt
-import colormaps as cmaps
 import plot_common as pcm
 from plot_common import wmean, wmedian, gwl_label, dt_tag
 
@@ -28,18 +27,23 @@ STIPPLE_BLOCK = max(1, int(round(2.5 / abs(float(R.lat[1] - R.lat[0])))))
 # FIG A: maps
 # ==============================
 dt = pcm.DT_STRICT
-fig = plt.figure(figsize=(6.2, 3.0 * len(MAP_GWLS) + 0.7))
-gs = fig.add_gridspec(len(MAP_GWLS), 1, hspace=0.12, top=0.95, bottom=0.13, left=0.02, right=0.98)
-for r, g in enumerate(MAP_GWLS):
-    ax = pcm.map_axes(fig, gs[r, 0])
-    pm = pcm.add_map(ax, R, R.masked(R.central(g, dt)), cmaps.precip_diff_12lev, 0, 1,
-                     f'{"abcd"[r]}) {gwl_label(g)}, D$_t$ = {dt:g}$\\sigma$ ({R.n_models(g)} models)')
+cmap_ret, norm_ret = pcm.retention_cmap_norm()
+fig = plt.figure(figsize=(11, 3.6))
+gs = fig.add_gridspec(1, len(MAP_GWLS), wspace=0.04, top=0.93, bottom=0.24, left=0.01, right=0.99)
+for c, g in enumerate(MAP_GWLS):
+    ax = pcm.map_axes(fig, gs[0, c])
+    pm = pcm.add_map(ax, R, R.masked(R.central(g, dt)), cmap_ret, None, None,
+                     f'{"abcd"[c]}) {gwl_label(g)}, D$_t$ = {dt:g}$\\sigma$ ({R.n_models(g)} models)',
+                     norm=norm_ret)
     unc = ds[f'uncert_{g}_{dt_tag(dt)}'].values
     pcm.coarse_stipple(ax, R, np.nan_to_num(unc) > UNCERT_MAJORITY, block=STIPPLE_BLOCK)
-cax = fig.add_axes([0.2, 0.08, 0.6, 0.018])
-fig.colorbar(pm, cax=cax, orientation='horizontal',
-             label=f'Fraction of analogs retained ({R.central_label()})\n'
-                   'Dots: most analogs uncertain (20-80% of models retain them)')
+cax = fig.add_axes([0.08, 0.13, 0.48, 0.03])
+pcm.retention_colorbar(fig, cax, pm, f'Fraction of analogs retained, {R.central_label()}')
+leg_h = [plt.Line2D([], [], ls='', marker='o', ms=3.5, mfc='k', mec='white', mew=0.4,
+                    label='Most analogs uncertain\n(retained by 20-80% of models)'),
+         plt.Rectangle((0, 0), 1, 1, fc=pcm.COVERAGE_GREY, ec='none', label=pcm.COVERAGE_LABEL)]
+fig.legend(handles=leg_h, loc='center left', bbox_to_anchor=(0.62, 0.145), fontsize=8,
+           frameon=False, handlelength=1.2, labelspacing=0.8)
 pcm.savefig(fig, 'retention_tier_maps.png')
 
 # ==============================

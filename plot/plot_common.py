@@ -149,7 +149,7 @@ def add_map(ax, R, field, cmap, vmin, vmax, title, norm=None):
     import cartopy.feature as cfeature
     pc = ccrs.PlateCarree()
     grey = np.where(R.land, 1.0, np.nan)
-    ax.pcolormesh(R.lon, R.lat, grey, cmap=ListedColormap(['0.82']), vmin=0, vmax=1,
+    ax.pcolormesh(R.lon, R.lat, grey, cmap=ListedColormap([COVERAGE_GREY]), vmin=0, vmax=1,
                   transform=pc, zorder=1, rasterized=True)
     kw = dict(norm=norm) if norm is not None else dict(vmin=vmin, vmax=vmax)
     pm = ax.pcolormesh(R.lon, R.lat, field, cmap=cmap, transform=pc, zorder=2,
@@ -159,6 +159,33 @@ def add_map(ax, R, field, cmap, vmin, vmax, title, norm=None):
     ax.add_feature(cfeature.COASTLINE.with_scale('50m'), linewidth=0.3, zorder=3)
     ax.set_title(title, loc='left', fontsize=9)
     return pm
+
+
+# Retention maps: kept cells have a full set (n = N_ANALOGS = 10), so retention
+# takes values in tenths. Class edges sit between tenths; everything <= 0.3 is
+# one class. Sequential, light = retained, so loss stands out and dark dots
+# stay visible over most of the map.
+RET_EDGES = [0.0, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.0]
+RET_TICKLABELS = ['≤0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1.0']
+COVERAGE_GREY = '0.82'
+COVERAGE_LABEL = f'< {cfg.N_ANALOGS} analogs or spacing relaxed'
+
+
+def retention_cmap_norm():
+    from matplotlib.colors import BoundaryNorm
+    n = len(RET_EDGES) - 1
+    cols = plt.get_cmap('YlOrBr')(np.linspace(0.95, 0.12, n))  # low -> high
+    return ListedColormap(cols), BoundaryNorm(RET_EDGES, n)
+
+
+def retention_colorbar(fig, cax, pm, label):
+    cb = fig.colorbar(pm, cax=cax, orientation='horizontal')
+    mids = 0.5 * (np.array(RET_EDGES[:-1]) + np.array(RET_EDGES[1:]))
+    cb.set_ticks(mids)
+    cb.set_ticklabels(RET_TICKLABELS)
+    cb.ax.tick_params(length=0, labelsize=8)
+    cb.set_label(label, fontsize=8.5)
+    return cb
 
 
 def coarse_stipple(ax, R, flag2d, block=10, frac=0.5, **kw):
@@ -174,6 +201,7 @@ def coarse_stipple(ax, R, flag2d, block=10, frac=0.5, **kw):
                 continue
             if np.mean(flag2d[i:i + block, j:j + block][k]) >= frac:
                 ys.append(R.lat[i + block // 2]); xs.append(R.lon[j + block // 2])
-    style = dict(s=0.6, c='k', marker='.', linewidths=0, zorder=4)
+    # black dot with a white rim: visible on both light and dark classes
+    style = dict(s=4, c='k', marker='o', edgecolors='white', linewidths=0.35, zorder=4)
     style.update(kw)
     ax.scatter(xs, ys, transform=ccrs.PlateCarree(), **style)

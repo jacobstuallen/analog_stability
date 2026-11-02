@@ -29,8 +29,8 @@ STIPPLE_BLOCK = max(1, int(round(2.5 / abs(float(R.lat[1] - R.lat[0])))))
 # ==============================
 dt = pcm.DT_STRICT
 cmap_ret, norm_ret = pcm.retention_cmap_norm()
-H = 3.05 * len(MAP_GWLS) + 1.4                     # bottom 1.4 in for colorbar + legend
-fig = plt.figure(figsize=(6.5, H))
+H = 8.5                     # bottom 1.4 in for colorbar + legend
+fig = plt.figure(figsize=(5.0, H))
 gs = fig.add_gridspec(len(MAP_GWLS), 1, hspace=0.1, top=1 - 0.2 / H, bottom=1.45 / H,
                       left=0.01, right=0.99)
 n_dots = 0
@@ -43,15 +43,15 @@ for r, g in enumerate(MAP_GWLS):
     n_dots += pcm.coarse_stipple(ax, R, np.nan_to_num(lost) >= ROBLOST_MAJORITY,
                                  block=STIPPLE_BLOCK)
 cax = fig.add_axes([0.12, 1.0 / H, 0.76, 0.06 / H * 3])
-pcm.retention_colorbar(fig, cax, pm, f'Fraction of analogs retained, {R.central_label()}')
+pcm.retention_colorbar(fig, cax, pm, f'Fraction of analogs retained')
 leg_h = [plt.Rectangle((0, 0), 1, 1, fc=pcm.COVERAGE_GREY, ec='none', label=pcm.COVERAGE_LABEL)]
 if n_dots:   # legend entry only if any block qualifies
     leg_h.insert(0, plt.Line2D([], [], ls='', marker='o', ms=3.5, mfc='k', mec='white', mew=0.4,
                                label=f'\u2265{ROBLOST_MAJORITY:.0%} of analogs robustly lost '
                                      f'(lost in \u226580% of models)'))
 print(f'  robust-loss dots drawn: {n_dots}')
-fig.legend(handles=leg_h, loc='upper center', bbox_to_anchor=(0.5, 0.42 / H), ncol=1, fontsize=7.5,
-           frameon=False, handlelength=1.2, labelspacing=0.4)
+#fig.legend(handles=leg_h, loc='upper center', bbox_to_anchor=(0.5, 0.45 / H), ncol=1, fontsize=10.0,
+#           frameon=False, handlelength=1.2, labelspacing=0.4)
 pcm.savefig(fig, 'retention_tier_maps.png')
 
 # ==============================
@@ -90,7 +90,7 @@ for ax, dt in zip(axes[:2], (pcm.DT_STRICT, pcm.DT_LOOSE)):
     ax.set_xlim(0, 1)
     ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
     ax.set_xticklabels(['0', '0.25', '0.5', '0.75', '1'])
-    ax.set_title(f'{"ab"[int(dt != pcm.DT_STRICT)]}) D$_t$ = {dt:g}$\\sigma$', loc='left', fontsize=9)
+    ax.set_title(f'{"ab"[int(dt != pcm.DT_STRICT)]}) D$_t$ = {dt:g}$\\sigma$', loc='left')
     ax.set_xlabel('Area-weighted fraction of analogs', fontsize=8)
     ax.tick_params(labelsize=7)
     ax.grid(axis='x', alpha=0.3, lw=0.5)
@@ -115,7 +115,7 @@ for b, name, bm in blist:
         fn_rows.append((name, g, v))
         i += 1
 axf.set_xlim(0, 1); axf.set_xticks([])
-axf.set_title('c) f$_{noise}$', loc='left', fontsize=9)
+axf.set_title('c) f$_{noise}$', loc='left')
 axf.set_xlabel('noise share\nof model spread', fontsize=7)
 for s in axf.spines.values():
     s.set_visible(False)

@@ -259,21 +259,33 @@ def _read_years(filepath, varname, ys, ye, lat_min, lat_max):
     """Annual values for [ys, ye] inclusive -> (T, nlat, nlon), or None if
     the file has no years in range.
 
-    Selects by calendar YEAR after sorting the time axis and keeping the
-    first record of any repeated year, so unsorted or duplicated time axes
-    (seen in some CCKP files) cannot break or double-count a window. Any
-    file needing this is reported once."""
+    Selects by calendar YEAR. An unsorted time axis is sorted, and records
+    that repeat a year are dropped ONLY if they are exact copies (reported
+    once). Repeated years with different data mean a corrupt time axis
+    (e.g. giss-e2-1-g ssp585 pr: 86 records, 64 year labels): that raises,
+    naming the file, rather than guessing which record is right."""
     ds = xr.open_dataset(filepath).sortby('lat').sel(lat=slice(lat_min, lat_max))
     da = ds[varname] if varname in ds else ds[
         [v for v in ds.data_vars if 'bnds' not in v and ds[v].ndim >= 2][0]]
     yrs = np.asarray(da['time'].dt.year.values)
     order = np.argsort(yrs, kind='stable')
-    _, first = np.unique(yrs[order], return_index=True)
+    uniq, first = np.unique(yrs[order], return_index=True)
     keep = order[first]                                   # sorted, one per year
+    if len(keep) != len(yrs):
+        for yr in uniq[np.bincount(np.searchsorted(uniq, yrs)) > 1]:
+            idx = np.where(yrs == yr)[0]
+            ref = da.isel(time=idx[0]).values
+            for k in idx[1:]:
+                if not np.array_equal(ref, da.isel(time=k).values, equal_nan=True):
+                    ds.close()
+                    raise ValueError(
+                        f'corrupt time axis in {os.path.basename(filepath)}: year {yr} '
+                        f'appears {len(idx)} times with DIFFERENT data ({len(yrs)} records, '
+                        f'{len(uniq)} distinct years). Exclude this model (MODEL_EXCLUDE).')
     if (len(keep) != len(yrs) or np.any(np.diff(yrs) <= 0)) and filepath not in _TIME_FIXED:
         _TIME_FIXED.add(filepath)
-        print(f'  WARNING time axis repaired (unsorted or {len(yrs) - len(keep)} repeated '
-              f'years): {os.path.basename(filepath)}', flush=True)
+        print(f'  WARNING time axis sorted / {len(yrs) - len(keep)} exact duplicate '
+              f'records dropped: {os.path.basename(filepath)}', flush=True)
     sel = keep[(yrs[keep] >= ys) & (yrs[keep] <= ye)]
     arr = da.isel(time=sel).values.astype(np.float64) if len(sel) > 0 else None
     ds.close()

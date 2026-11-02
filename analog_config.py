@@ -135,6 +135,12 @@ MODELS = {
     'noresm2-mm': 'r1i1p1f1', 'ukesm1-0-ll': 'r1i1p1f2',
     # taiesm1 removed 2026-10-31: no CCKP txx/rx5day files exist for it
 }
+# Per-variable-set exclusions for bad source files. giss-e2-1-g ssp585 pr
+# (annual mean file): 86 records but only 64 distinct year labels, 2078-2100
+# absent, i.e. a corrupt time axis. Its extremes files are fine.
+MODEL_EXCLUDE = {'extremes': [], 'means': ['giss-e2-1-g']}
+for _m in MODEL_EXCLUDE[VARSET]:
+    MODELS.pop(_m, None)
 
 # ==============================
 # GWL windows (20-yr, inclusive, relative to 1850-1900), SSP5-8.5.

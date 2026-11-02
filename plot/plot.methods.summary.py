@@ -209,7 +209,7 @@ for nsig in [1, 2]:
                           alpha=0.6, ls='--', zorder=4))
 axa.scatter(f_mu_t, f_mu_r, s=120, marker='*', c='k', zorder=5,
             label='Focal cell')
-axa.scatter(mu_t[best], mu_r[best], s=70, marker='D', facecolor='#d6604d',
+axa.scatter(mu_t[best], mu_r[best], s=35, marker='D', facecolor='#d6604d',
             edgecolor='white', lw=0.6, zorder=5, label='Best analog')
 axa.set_xlabel('TXx (°C)', fontsize=9)
 axa.set_ylabel('Rx5day (log1p mm)' if RX5_LOG else 'Rx5day (mm)', fontsize=9)
@@ -251,7 +251,7 @@ axc.add_feature(cfeature.COASTLINE, lw=0.3, zorder=1)
 sc2 = axc.scatter(lon_arr[clon], lat_arr[clat], c=sigma_all, s=2,
                   cmap='viridis', vmin=0, vmax=4, transform=ccrs.PlateCarree(),
                   zorder=2)
-axc.scatter(focal_lon, focal_lat, s=150, marker='*', c='red',
+axc.scatter(focal_lon, focal_lat, s=75, marker='*', c='red',
             edgecolor='white', lw=0.5, transform=ccrs.PlateCarree(), zorder=3)
 axc.set_global()
 axc.set_title(r'c) $\sigma$ dissimilarity to focal cell (this biome)', loc='left', fontsize=10)

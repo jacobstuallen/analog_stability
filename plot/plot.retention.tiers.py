@@ -20,7 +20,7 @@ from plot_common import wmean, wmedian, gwl_label, dt_tag
 pcm.setup_style()
 R = pcm.Retention()
 ds = R.ds
-MAP_GWLS = [g for g in ('gwl2', 'gwl4') if g in R.gwls] or [R.gwls[0], R.gwls[-1]]
+MAP_GWLS = [g for g in ('gwl2', 'gwl3') if g in R.gwls] or [R.gwls[0], R.gwls[-1]]
 ROBLOST_MAJORITY = 0.5   # share of a cell's analogs robustly lost
 STIPPLE_BLOCK = max(1, int(round(2.5 / abs(float(R.lat[1] - R.lat[0])))))
 
@@ -29,22 +29,22 @@ STIPPLE_BLOCK = max(1, int(round(2.5 / abs(float(R.lat[1] - R.lat[0])))))
 # ==============================
 dt = pcm.DT_STRICT
 cmap_ret, norm_ret = pcm.retention_cmap_norm()
-fig = plt.figure(figsize=(11, 3.6))
-gs = fig.add_gridspec(1, len(MAP_GWLS), wspace=0.04, top=0.93, bottom=0.24, left=0.01, right=0.99)
-for c, g in enumerate(MAP_GWLS):
-    ax = pcm.map_axes(fig, gs[0, c])
+fig = plt.figure(figsize=(6.5, 3.05 * len(MAP_GWLS) + 1.2))
+gs = fig.add_gridspec(len(MAP_GWLS), 1, hspace=0.1, top=0.97, bottom=0.17, left=0.01, right=0.99)
+for r, g in enumerate(MAP_GWLS):
+    ax = pcm.map_axes(fig, gs[r, 0])
     pm = pcm.add_map(ax, R, R.masked(R.central(g, dt)), cmap_ret, None, None,
-                     f'{"abcd"[c]}) {gwl_label(g)}, D$_t$ = {dt:g}$\\sigma$ ({R.n_models(g)} models)',
+                     f'{"abcd"[r]}) {gwl_label(g)}, D$_t$ = {dt:g}$\\sigma$ ({R.n_models(g)} models)',
                      norm=norm_ret)
     lost = ds[f'roblost_{g}_{dt_tag(dt)}'].values
     pcm.coarse_stipple(ax, R, np.nan_to_num(lost) >= ROBLOST_MAJORITY, block=STIPPLE_BLOCK)
-cax = fig.add_axes([0.08, 0.13, 0.48, 0.03])
+cax = fig.add_axes([0.12, 0.115, 0.76, 0.018])
 pcm.retention_colorbar(fig, cax, pm, f'Fraction of analogs retained, {R.central_label()}')
 leg_h = [plt.Line2D([], [], ls='', marker='o', ms=3.5, mfc='k', mec='white', mew=0.4,
-                    label=f'\u2265{ROBLOST_MAJORITY:.0%} of analogs robustly lost\n(lost in \u226580% of models)'),
+                    label=f'\u2265{ROBLOST_MAJORITY:.0%} of analogs robustly lost (lost in \u226580% of models)'),
          plt.Rectangle((0, 0), 1, 1, fc=pcm.COVERAGE_GREY, ec='none', label=pcm.COVERAGE_LABEL)]
-fig.legend(handles=leg_h, loc='center left', bbox_to_anchor=(0.62, 0.145), fontsize=8,
-           frameon=False, handlelength=1.2, labelspacing=0.8)
+fig.legend(handles=leg_h, loc='upper center', bbox_to_anchor=(0.5, 0.045), ncol=1, fontsize=7.5,
+           frameon=False, handlelength=1.2, labelspacing=0.4)
 pcm.savefig(fig, 'retention_tier_maps.png')
 
 # ==============================
@@ -52,7 +52,7 @@ pcm.savefig(fig, 'retention_tier_maps.png')
 # ==============================
 blist = R.biomes()
 G = len(R.gwls)
-TIER_COL = {'robret': '#2166ac', 'uncert': '#d9d9d9', 'roblost': '#b2182b'}
+TIER_COL = {'robret': 'darkslategray', 'uncert': '#d9d9d9', 'roblost': 'indianred'}
 TIER_LAB = {'robret': 'Robustly retained', 'uncert': 'Uncertain', 'roblost': 'Robustly lost'}
 gap = 0.8
 ypos, ylab, yb = [], [], []
@@ -64,8 +64,10 @@ for b, name, bm in blist:
     y += gap
 ypos = -np.array(ypos)
 
-fig, axes = plt.subplots(1, 3, figsize=(10, 0.19 * len(ypos) + 1.4), sharey=True,
-                         gridspec_kw=dict(width_ratios=[1, 1, 0.28], wspace=0.1))
+fig, axes = plt.subplots(1, 3, figsize=(7, 8.5), sharey=True,
+                         gridspec_kw=dict(width_ratios=[1, 1, 0.28], wspace=0.08,
+                                          left=0.22, right=0.98, top=0.96, bottom=0.1))
+axes[0].set_ylim(ypos.min() - 0.7, ypos.max() + 0.7)   # no empty band above/below the bars
 table = []
 for ax, dt in zip(axes[:2], (pcm.DT_STRICT, pcm.DT_LOOSE)):
     i = 0
@@ -88,7 +90,7 @@ for ax, dt in zip(axes[:2], (pcm.DT_STRICT, pcm.DT_LOOSE)):
 axes[0].set_yticks(ypos)
 axes[0].set_yticklabels(ylab, fontsize=6)
 for name, yc in yb:
-    axes[0].text(-0.16, -yc, name, transform=axes[0].get_yaxis_transform(), ha='right',
+    axes[0].text(-0.17, -yc, name, transform=axes[0].get_yaxis_transform(), ha='right',
                  va='center', fontsize=7.5)
 
 # fnoise column
@@ -111,8 +113,8 @@ axf.set_xlabel('noise share\nof model spread', fontsize=7)
 for s in axf.spines.values():
     s.set_visible(False)
 h = [plt.Rectangle((0, 0), 1, 1, color=c, label=TIER_LAB[t]) for t, c in TIER_COL.items()]
-fig.legend(handles=h, loc='upper center', ncol=3, fontsize=8, frameon=False,
-           bbox_to_anchor=(0.45, 1.0 + 0.4 / fig.get_figheight()))
+fig.legend(handles=h, loc='lower center', ncol=3, fontsize=8, frameon=False,
+           bbox_to_anchor=(0.6, 0.0))
 pcm.savefig(fig, 'retention_tier_bars.png')
 
 print('\n--- tiers (ret/unc/lost), area-weighted mean over cells with analogs ---')

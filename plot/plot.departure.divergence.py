@@ -40,7 +40,7 @@ HIGHLIGHT = [14, 1, 8, 2]        # tropical moist, boreal, temperate broadleaf, 
 SHORT = {14: 'Trop. moist', 1: 'Boreal', 8: 'Temp. broadleaf', 2: 'Deserts/xeric'}
 RATIOS = [0.25, 0.5]
 ATTR_GWL = os.environ.get('ANALOG_ATTR_GWL', 'gwl4')   # GWL for panel c
-VAR_COL = {'txx': '#b5541c', 'rx5day': '#3a6f9a'}
+VAR_COL = {'txx': 'indianred', 'rx5day': 'darkslategray'}
 VAR_LAB = {'txx': 'TXx', 'rx5day': 'Rx5day'}
 LABEL_A = {7: 'Rock and ice', 5: 'Mediterranean'}   # direct labels in (a): steepest trajectories
 # dark outline on highlighted lines in (b, c): keeps the light boreal tan readable
@@ -110,12 +110,10 @@ axa.plot([0, xmax], [0, xmax], color='0.4', lw=0.8, ls=':')
 for q in RATIOS:
     axa.plot([0, xmax], [0, q * xmax], color='0.75', lw=0.6, zorder=0)
 
-
 def ratio_label(q, txt, col):
     # label just inside the axes where the line y = q x leaves the plot
     xt = min(xmax * 0.97, 0.94 * ymax / q)
     axa.text(xt + 0.01 * xmax, q * xt, txt, fontsize=6.5, color=col, ha='left', va='center')
-
 
 ratio_label(1.0, '1:1', '0.4')
 for q in RATIOS:
@@ -130,9 +128,9 @@ for r in rows:
     #                 textcoords='offset points', fontsize=6.5, color='0.15', ha='left', va='bottom')
 axa.set_xlim(0, xmax)
 axa.set_ylim(0, ymax)
-axa.set_xlabel(r'Local departure $|\Delta_f|$ (ICV units)', fontsize=8)
-axa.set_ylabel(r'Pair divergence $|\Delta_a - \Delta_f|$ (ICV units)', fontsize=8)
-axa.set_title('(a) Departure vs divergence (forced)', loc='left', fontsize=8.5)
+axa.set_xlabel(r'Local departure $|\Delta_f|$ (ICV units)', fontsize=10)
+axa.set_ylabel(r'Pair divergence $|\Delta_a - \Delta_f|$ (ICV units)', fontsize=10)
+axa.set_title('(a) Departure vs divergence', loc='left')
 
 # ------------------------------------------------------------------
 # (b) forced and (c) per-model divergence vs GWL
@@ -150,10 +148,9 @@ def direct_labels(ax, items, ymin_gap):  # noqa: E302
     for i in range(1, len(ys)):
         ys[i] = max(ys[i], ys[i - 1] + ymin_gap)
     for (y0, txt, c), y in zip(items, ys):
-        ax.annotate(txt, xy=(x[-1], y0), xytext=(x[-1] + 0.3, y), fontsize=6.5, color='0.15',
+        ax.annotate(txt, xy=(x[-1], y0), xytext=(x[-1] + 0.25, y), fontsize=6.5, color='0.15',
                     va='center', ha='left', annotation_clip=False,
                     arrowprops=dict(arrowstyle='-', color=c, lw=0.6, shrinkA=0, shrinkB=2))
-
 
 def draw_div(ax, key, floor, title):
     yhi = YHI[key]
@@ -171,13 +168,14 @@ def draw_div(ax, key, floor, title):
     ax.text(x[-2], floor[-2] - 0.015 * yhi, 'noise floor', fontsize=6.5, color='0.4', va='top', ha='center')
     direct_labels(ax, hl, 0.045 * yhi)
     ax.set_xticks(x)
-    ax.set_xticklabels([gwl_tex(g) for g in gwls], fontsize=7.5)
+    ax.set_xticklabels([gwl_tex(g) for g in gwls], fontsize=8)
     ax.set_xlim(x[0] - 0.2, x[-1] + 0.2)
     ax.set_ylim(0, yhi)
-    ax.set_title(title, loc='left', fontsize=8.5)
-    ax.set_xlabel('Global warming level' + ('' if use_common else
-                  '\n(n = ' + ', '.join(str(n) for n in nmod) + ' models)'), fontsize=8)
-    ax.set_ylabel('Pair divergence (ICV units)', fontsize=8)
+    ax.set_title(title, loc='left')
+    #ax.set_xlabel('Global warming level' + ('' if use_common else
+    #              '\n(n = ' + ', '.join(str(n) for n in nmod) + ' models)'), fontsize=8)
+    ax.set_xlabel('Global warming level', fontsize=10)
+    ax.set_ylabel('Pair divergence (ICV units)', fontsize=10)
 
 
 draw_div(axb, 'divm', flm, '(b) Forced response')
@@ -201,38 +199,43 @@ for yi, (name, d, dg, sh) in zip(yy, attr):
     axc.plot(dg, yi, marker='D', ms=4, mfc='white', mec='k', mew=0.8, ls='', zorder=4)
 axc.axvline(flm[gwls.index(ga)], color='0.45', lw=2.5, alpha=0.5, zorder=0)
 axc.set_yticks(yy)
-axc.set_yticklabels([a[0] for a in attr], fontsize=7)
+axc.set_yticklabels([a[0] for a in attr], fontsize=8)
 axc.yaxis.tick_right()
 axc.tick_params(axis='y', length=0)
 axc.set_ylim(yy[-1] - 0.6, 0.6)
 axc.set_xlim(0, np.nanmax([max(a[1], a[2]) for a in attr]) * 1.08)
 axc.set_xlabel(f'Pair divergence at {gwl_tex(ga)} (ICV units)', fontsize=8)
-axc.set_title(f'(c) What drives divergence ({gwl_tex(ga)}, forced)', loc='left', fontsize=8.5)
+axc.set_title(f'(c) Share of divergence ({gwl_tex(ga)})', loc='left')
 axc.grid(axis='y', visible=False)
 
 # ---- legends along the bottom ----
 pa, pb, pc = axa.get_position(), axb.get_position(), axc.get_position()
 y_leg = pa.y0 - 0.10
 ha = [Line2D([], [], ls='', marker='o', color=color[r['b']], ms=5, label=r['name']) for r in rows]
-fig.legend(handles=ha, fontsize=8.0, loc='upper left', bbox_to_anchor=(pa.x0 - 0.04, y_leg),
-           ncol=3, frameon=False, handletextpad=0.2, columnspacing=0.8)
+fig.legend(handles=ha, fontsize=8.0, loc='upper left', bbox_to_anchor=(pa.x0-0.02, y_leg),
+           ncol=4, frameon=False, handletextpad=0.2, columnspacing=0.8)
 hb = [Line2D([], [], color='0.6', lw=1.8, marker='o', ms=3.5, mec='0.35', mew=0.5,
-             label='Highlighted biome (colors as in a)'),
+             label='Highlighted biome'),
       Line2D([], [], color='0.75', lw=0.8, label='Other biomes'),
       Line2D([], [], color='0.45', lw=2.5, alpha=0.5, label='Analytic noise floor')]
-fig.legend(handles=hb, fontsize=8.0, loc='upper center', bbox_to_anchor=(0.5 * (pb.x0 + pb.x1+0.1), y_leg),
+#fig.legend(handles=hb, fontsize=8.0, loc='upper left', bbox_to_anchor=(0.5 * (pb.x0 + pb.x1+0.1), y_leg),
+#           ncol=1, frameon=False, handlelength=1.8)
+axb.legend(handles=hb, fontsize=8.0, loc='upper left', 
            ncol=1, frameon=False, handlelength=1.8)
 hs = [Line2D([], [], ls='', marker='o', color='0.5', ms=np.sqrt(sz), label=gwl_tex(g))
       for sz, g in zip(sizes, gwls)]
-axa.legend(handles=hs, fontsize=6.5, loc='lower right', ncol=1, frameon=False,
-           handletextpad=0.1, labelspacing=0.3, title='Marker size', title_fontsize=6.5)
+axa.legend(handles=hs, fontsize=8.0, loc='lower right', ncol=1, frameon=False,
+           handletextpad=0.1, labelspacing=0.3)#,  title_fontsize=6.5)
 hc = [plt.Rectangle((0, 0), 1, 1, color=VAR_COL[vk0], label=f'{VAR_LAB.get(vk0, vk0)} share'),
       plt.Rectangle((0, 0), 1, 1, color=VAR_COL[vk1], label=f'{VAR_LAB.get(vk1, vk1)} share'),
       Line2D([], [], ls='', marker='D', ms=4, mfc='white', mec='k', mew=0.8,
              label='One global ICV ruler'),
       Line2D([], [], color='0.45', lw=2.5, alpha=0.5, label='Analytic noise floor')]
-fig.legend(handles=hc, fontsize=8.0, loc='upper center', bbox_to_anchor=(0.5 * (pc.x0 + pc.x1), y_leg),
-           ncol=1, frameon=False, handlelength=1.4)
+fig.legend(handles=hc, fontsize=8.0, loc='upper center', 
+           bbox_to_anchor=(0.5 * (pc.x0 + pc.x1), y_leg),
+           ncol=2, frameon=False, handlelength=1.4)
+#axc.legend(handles=hc, fontsize=8.0, loc='lower right', 
+#           ncol=1, frameon=False, handlelength=1.1)
 
 pcm.savefig(fig, 'departure_divergence.png')
 
@@ -247,7 +250,7 @@ print('    departure mmm | divergence mmm | divergence per-model | comove mmm')
 for r in rows:
     f = lambda a: ' '.join(f'{v:5.2f}' for v in a)  # noqa: E731
     print(f'  {r["name"]:<24} {f(r["dep"])} | {f(r["divm"])} | {f(r["div"])} | {f(r["com"])}')
-print(f'\n--- {ga} attribution (forced): divergence local | global ruler | {vk0} share ---')
+print(f'\n--- {ga} attribution: divergence local | global ruler | {vk0} share ---')
 for name, d, dg, sh in attr:
     print(f'  {name:<24} {d:5.2f} | {dg:5.2f} | {sh:4.2f}')
 print('  noise floor per-model: ' + ' '.join(f'{v:.2f}' for v in fl)
